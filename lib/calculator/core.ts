@@ -9,9 +9,11 @@ export type UnitHint =
   | 'sq-ft'
   | 'sq-in'
   | 'sq-m'
+  | 'sq-mm'
   | 'cu-ft'
   | 'cu-in'
-  | 'cu-m';
+  | 'cu-m'
+  | 'cu-mm';
 
 export type MeasurementSystem = 'neutral' | 'imperial' | 'metric';
 
@@ -114,6 +116,8 @@ export function measurement(
     'm-2': 'sq-m',
     'm-3': 'cu-m',
     'mm-1': 'mm',
+    'mm-2': 'sq-mm',
+    'mm-3': 'cu-mm',
   };
   return {
     amount: amount * factors[unit] ** power,
@@ -162,8 +166,40 @@ export function operate(a: CalcValue, operator: Operator, b: CalcValue): CalcVal
     throw new CalcError('TYP Error');
   }
 
+  if (a.power > 0 && b.power === 0) {
+    const amount = operator === '*' ? a.amount * b.amount : a.amount / b.amount;
+    return {
+      ...a,
+      amount,
+      source: a.source
+        ? {
+            ...a.source,
+            amount: operator === '*' ? a.source.amount * b.amount : a.source.amount / b.amount,
+          }
+        : undefined,
+    };
+  }
+  if (operator === '*' && a.power === 0 && b.power > 0) {
+    return {
+      ...b,
+      amount: a.amount * b.amount,
+      source: b.source ? { ...b.source, amount: a.amount * b.source.amount } : undefined,
+    };
+  }
+
   const power = operator === '*' ? a.power + b.power : a.power - b.power;
   if (power < 0 || power > 3) throw new CalcError('DIM Error');
+  if (
+    power > 0 &&
+    a.source &&
+    b.source &&
+    a.source.unit === b.source.unit
+  ) {
+    const sourceAmount = operator === '*'
+      ? a.source.amount * b.source.amount
+      : a.source.amount / b.source.amount;
+    return measurement(sourceAmount, a.source.unit, power);
+  }
   return {
     amount: operator === '*' ? a.amount * b.amount : a.amount / b.amount,
     power,
@@ -298,9 +334,10 @@ function gcd(a: number, b: number): number {
   return x || 1;
 }
 
-function compactNumber(value: number, maxDecimals = 8): string {
+function compactNumber(value: number, maxDecimals = 8, exponent = true): string {
   if (!Number.isFinite(value)) throw new CalcError('0-fL0');
   if (Math.abs(value) > 19_999_999.99) {
+    if (!exponent) throw new CalcError('0-fL0');
     return value.toExponential(6).replace('+', '');
   }
   const rounded = Number(value.toFixed(maxDecimals));
@@ -369,22 +406,22 @@ export function formatValue(value: CalcValue, preferences: Preferences): Formatt
   if (value.angle) {
     const digits = preferences.degreeDecimals === 'fixed-2'
       ? value.amount.toFixed(2)
-      : compactNumber(value.amount, 7).replace(/\.$/, '');
+      : compactNumber(value.amount, 7, preferences.exponent).replace(/\.$/, '');
     return { valueText: digits, unitText: 'DEG', plainText: `${digits}°` };
   }
 
   if (value.power === 0) {
-    const text = compactNumber(value.amount);
+    const text = compactNumber(value.amount, 8, preferences.exponent);
     return { valueText: text, unitText: '', plainText: text };
   }
 
   if (value.power === 1) {
     if (value.unit === 'decimal-ft') {
-      const text = compactNumber(value.amount / 12, 6);
+      const text = compactNumber(value.amount / 12, 6, preferences.exponent);
       return { valueText: text, unitText: 'FEET', plainText: `${text} ft` };
     }
     if (value.unit === 'decimal-in') {
-      const text = compactNumber(value.amount, 6);
+      const text = compactNumber(value.amount, 6, preferences.exponent);
       return { valueText: text, unitText: 'INCH', plainText: `${text} in` };
     }
     if (value.unit === 'in') return formatImperialLength(value.amount, preferences, false);
@@ -392,27 +429,34 @@ export function formatValue(value: CalcValue, preferences: Preferences): Formatt
       const meters = value.amount * 0.0254;
       const text = preferences.meterDecimals === 'fixed-3'
         ? meters.toFixed(3)
-        : compactNumber(meters, 8).replace(/\.$/, '');
+        : compactNumber(meters, 8, preferences.exponent).replace(/\.$/, '');
       return { valueText: text, unitText: 'M', plainText: `${text} m` };
     }
     if (value.unit === 'mm') {
-      const text = compactNumber(value.amount * 25.4, 4);
+      const text = compactNumber(value.amount * 25.4, 4, preferences.exponent);
       return { valueText: text, unitText: 'MM', plainText: `${text} mm` };
     }
     return formatImperialLength(value.amount, preferences, true);
   }
 
-  const useMetric = value.power === 2
-    ? preferences.areaFormat === 'sq-m' || (preferences.areaFormat === 'standard' && value.system === 'metric')
-    : preferences.volumeFormat === 'cu-m' || (preferences.volumeFormat === 'standard' && value.system === 'metric');
+  const forceMetric = value.power === 2
+    ? preferences.areaFormat === 'sq-m'
+    : preferences.volumeFormat === 'cu-m';
+  const useMetric = forceMetric || (value.power === 2
+    ? preferences.areaFormat === 'standard' && value.system === 'metric'
+    : preferences.volumeFormat === 'standard' && value.system === 'metric');
   const forceImperial = value.power === 2
     ? preferences.areaFormat === 'sq-ft'
     : preferences.volumeFormat === 'cu-ft';
   const useInches = !forceImperial && !useMetric && (value.unit === 'sq-in' || value.unit === 'cu-in');
+  const useMillimeters = !forceImperial && !forceMetric && (value.unit === 'sq-mm' || value.unit === 'cu-mm');
   let converted: number;
   let unitText: string;
 
-  if (useMetric) {
+  if (useMillimeters) {
+    converted = value.amount * 25.4 ** value.power;
+    unitText = value.power === 2 ? 'SQ MM' : 'CU MM';
+  } else if (useMetric) {
     converted = value.amount * 0.0254 ** value.power;
     unitText = value.power === 2 ? 'SQ M' : 'CU M';
   } else if (useInches) {
@@ -422,12 +466,12 @@ export function formatValue(value: CalcValue, preferences: Preferences): Formatt
     converted = value.amount / 12 ** value.power;
     unitText = value.power === 2 ? 'SQ FEET' : 'CU FEET';
   }
-  const text = compactNumber(converted, 6);
+  const text = compactNumber(converted, 6, preferences.exponent);
   return { valueText: text, unitText, plainText: `${text} ${unitText.toLowerCase()}` };
 }
 
 export function withUnit(value: CalcValue, unit: UnitHint): CalcValue {
-  const system: MeasurementSystem = unit === 'm' || unit === 'mm' || unit === 'sq-m' || unit === 'cu-m'
+  const system: MeasurementSystem = unit === 'm' || unit === 'mm' || unit === 'sq-m' || unit === 'sq-mm' || unit === 'cu-m' || unit === 'cu-mm'
     ? 'metric'
     : unit === 'auto'
       ? value.system

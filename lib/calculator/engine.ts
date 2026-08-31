@@ -96,7 +96,7 @@ export interface CalculatorState {
   composedInches?: number;
   current?: CalcValue;
   inputActive: boolean;
-  inputKind?: 'percent' | 'dms' | 'decimal-degree';
+  inputKind?: 'percent' | 'dms' | 'decimal-degree' | 'recalled';
   expression: ExpressionToken[];
   parenthesisDepth: number;
   modifier?: 'convert' | 'recall';
@@ -125,6 +125,7 @@ export interface PersistedCalculatorState {
 export type CalculatorAction =
   | { type: 'press'; key: KeyId }
   | { type: 'set-preference'; key: keyof Preferences; value: Preferences[keyof Preferences] }
+  | { type: 'reset-preferences' }
   | { type: 'toggle-preferences'; open?: boolean }
   | { type: 'hydrate'; payload: Partial<PersistedCalculatorState> };
 
@@ -216,7 +217,9 @@ function finalizeInput(state: CalculatorState): { state: CalculatorState; value?
       value = scalar(number);
     }
   } else if (composed !== undefined) {
-    value = { amount: composed, power: 1, unit: 'ft-in', system: 'imperial' };
+    value = state.current?.source && state.current.amount === composed
+      ? state.current
+      : { amount: composed, power: 1, unit: 'ft-in', system: 'imperial' };
   }
 
   const next = {
@@ -323,15 +326,37 @@ function addDecimal(state: CalculatorState): CalculatorState {
   return { ...next, display: pendingDisplay(next) };
 }
 
+function unitHintFor(unit: 'ft' | 'in' | 'm' | 'mm', power: number): CalcValue['unit'] {
+  const hints = {
+    ft: ['auto', 'ft-in', 'sq-ft', 'cu-ft'],
+    in: ['auto', 'in', 'sq-in', 'cu-in'],
+    m: ['auto', 'm', 'sq-m', 'cu-m'],
+    mm: ['auto', 'mm', 'sq-mm', 'cu-mm'],
+  } as const;
+  if (power < 1 || power > 3) throw new CalcError('DIM Error');
+  return hints[unit][power];
+}
+
 function enterUnit(state: CalculatorState, unit: 'ft' | 'in' | 'm' | 'mm'): CalculatorState {
   const number = numericEntry(state);
   if (number === undefined) {
     const source = state.current?.source;
-    if (source?.unit === unit && source.power < 3) {
-      const value = measurement(source.amount, unit, source.power + 1);
-      return showValue({ ...state, entry: '', fractionNumerator: undefined }, value, source.power + 1 === 2 ? 'AREA' : 'VOL');
+    const repeatedUnit = source?.unit === unit || (source?.unit === 'mm' && unit === 'm');
+    if (source && repeatedUnit && source.power < 3) {
+      const value = measurement(source.amount, source.unit, source.power + 1);
+      return showValue(
+        { ...state, entry: '', fractionNumerator: undefined, composedInches: undefined },
+        value,
+        source.power + 1 === 2 ? 'AREA' : 'VOL',
+      );
     }
-    if (state.current && state.current.power > 0) return showValue(state, withUnit(state.current, unit === 'ft' ? 'ft-in' : unit), 'CONV');
+    if (state.current && state.current.power > 0) {
+      return showValue(
+        { ...state, composedInches: undefined },
+        withUnit(state.current, unitHintFor(unit, state.current.power)),
+        'CONV',
+      );
+    }
     throw new CalcError('ENT Error');
   }
 
@@ -403,8 +428,12 @@ function calculateEquals(state: CalculatorState): CalculatorState {
   }
 
   const tokens = [...finalized.state.expression];
+  if (!tokens.length && finalized.value) {
+    const recalledInput = finalized.state.inputKind === 'recalled';
+    const shown = showValue({ ...finalized.state, lastKey: 'equals' }, finalized.value, 'RESULT');
+    return recalledInput ? { ...shown, inputActive: true, inputKind: 'recalled' } : shown;
+  }
   if (finalized.value && tokens.at(-1)?.type !== 'value') tokens.push({ type: 'value', value: cloneValue(finalized.value) });
-  if (!tokens.length && finalized.value) return showValue({ ...finalized.state, lastKey: 'equals' }, finalized.value, 'RESULT');
   if (!tokens.length || tokens.at(-1)?.type === 'operator') throw new CalcError('ENT Error');
   for (let index = 0; index < finalized.state.parenthesisDepth; index += 1) {
     tokens.push({ type: 'right' });
@@ -685,9 +714,12 @@ function memoryStore(state: CalculatorState, slot: 'm1' | 'm2' | 'm3'): Calculat
 }
 
 function memoryRecall(state: CalculatorState, slot: keyof MemoryState): CalculatorState {
-  const value = state.memory[slot];
-  if (!value) return showValue(state, scalar(0), slot.toUpperCase());
-  return { ...showValue({ ...state, modifier: undefined }, value, slot.toUpperCase()), inputActive: true };
+  const value = state.memory[slot] ?? scalar(0);
+  return {
+    ...showValue({ ...state, modifier: undefined, inputKind: 'recalled' }, value, slot.toUpperCase()),
+    inputActive: true,
+    inputKind: 'recalled',
+  };
 }
 
 function memoryPlus(state: CalculatorState, subtract = false): CalculatorState {
@@ -707,7 +739,15 @@ function percent(state: CalculatorState): CalculatorState {
   const lastValue = [...tokens].reverse().find((token): token is Extract<ExpressionToken, { type: 'value' }> => token.type === 'value');
   if (lastOperator && lastValue) {
     const value = percentValue(lastValue.value, lastOperator.operator, input.value.amount);
-    return { ...showValue({ ...input.state, inputKind: 'percent' }, value, '%'), inputActive: true, inputKind: 'percent' };
+    return calculateEquals({
+      ...input.state,
+      current: value,
+      entry: '',
+      fractionNumerator: undefined,
+      composedInches: undefined,
+      inputActive: true,
+      inputKind: 'percent',
+    });
   }
   return { ...showValue({ ...input.state, inputKind: 'percent' }, input.value, '%'), inputActive: true, inputKind: 'percent' };
 }
@@ -742,10 +782,12 @@ function convertCurrentUnit(state: CalculatorState, unit: 'feet' | 'inch' | 'met
     return { ...showValue(input.state, entered, 'MM'), inputActive: true };
   }
   let hint: CalcValue['unit'];
-  if (unit === 'feet') hint = input.value.unit === 'decimal-ft' ? 'ft-in' : 'decimal-ft';
-  else if (unit === 'inch') hint = input.value.unit === 'decimal-in' ? 'in' : 'decimal-in';
-  else if (unit === 'millimeter') hint = 'mm';
-  else hint = 'm';
+  if (input.value.power === 1 && unit === 'feet') hint = input.value.unit === 'decimal-ft' ? 'ft-in' : 'decimal-ft';
+  else if (input.value.power === 1 && unit === 'inch') hint = input.value.unit === 'decimal-in' ? 'in' : 'decimal-in';
+  else {
+    const baseUnit = unit === 'feet' ? 'ft' : unit === 'inch' ? 'in' : unit === 'millimeter' ? 'mm' : 'm';
+    hint = unitHintFor(baseUnit, input.value.power);
+  }
   return { ...showValue(input.state, withUnit(input.value, hint), 'CONV'), inputActive: true };
 }
 
@@ -769,8 +811,21 @@ function changeSign(state: CalculatorState): CalculatorState {
 function clearAll(state: CalculatorState): CalculatorState {
   return {
     ...initialCalculatorState(),
-    preferences: state.preferences,
+    preferences: {
+      ...state.preferences,
+      onCenter: DEFAULT_PREFERENCES.onCenter,
+      desiredRiser: DEFAULT_PREFERENCES.desiredRiser,
+    },
     powered: true,
+  };
+}
+
+function recallSharedRegister(state: CalculatorState, key: keyof SharedRegisters, label: string): CalculatorState {
+  const value = state.registers[key] ?? scalar(0);
+  return {
+    ...showValue({ ...state, modifier: undefined, inputKind: 'recalled' }, value, `${label} STORED`),
+    inputActive: true,
+    inputKind: 'recalled',
   };
 }
 
@@ -781,9 +836,61 @@ function handleRecall(state: CalculatorState, key: KeyId): CalculatorState {
   }
   if (key === 'mplus') return memoryRecall({ ...state, modifier: undefined }, 'cumulative');
   if (key === '1' || key === '2' || key === '3') return memoryRecall({ ...state, modifier: undefined }, `m${key}` as 'm1' | 'm2' | 'm3');
+  if (key === '4') return recallSharedRegister(state, 'a', 'A');
+  if (key === '5') return recallSharedRegister(state, 'b', 'B');
+  if (key === '6') return recallSharedRegister(state, 'c', 'C');
+  if (key === '7') return recallSharedRegister(state, 'aNew', 'An');
+  if (key === '8') return recallSharedRegister(state, 'bNew', 'Bn');
+  if (key === 'fraction') {
+    return {
+      ...showValue(
+        { ...state, modifier: undefined, inputKind: 'recalled' },
+        { amount: 1 / state.preferences.fractionDenominator, power: 1, unit: 'in', system: 'imperial' },
+        state.preferences.constantFraction ? 'CONST' : 'STD',
+      ),
+      inputActive: true,
+      inputKind: 'recalled',
+    };
+  }
   if (key === 'equals') return { ...state, modifier: undefined, preferencesOpen: true, display: { ...state.display, label: 'PREFS' } };
   if (key === 'jack') return showValue({ ...state, modifier: undefined }, { amount: state.preferences.onCenter, power: 1, unit: 'in', system: 'imperial' }, 'JKOC');
-  if (key === 'stair') return showValue({ ...state, modifier: undefined }, { amount: state.preferences.desiredRiser, power: 1, unit: 'in', system: 'imperial' }, 'R-HT STORED');
+  if (key === 'pitch') {
+    if (state.permanentPitchSlope === undefined) throw new CalcError('ENT Error');
+    return {
+      ...showValue(
+      { ...state, modifier: undefined, inputKind: 'recalled' },
+      { amount: state.permanentPitchSlope * 12, power: 1, unit: 'in', system: 'imperial' },
+      'PTCH STORED',
+      ),
+      inputActive: true,
+      inputKind: 'recalled',
+    };
+  }
+  if (key === 'hip') {
+    if (state.irregularPitchSlope === undefined) throw new CalcError('ENT Error');
+    return {
+      ...showValue(
+      { ...state, modifier: undefined, inputKind: 'recalled' },
+      { amount: state.irregularPitchSlope * 12, power: 1, unit: 'in', system: 'imperial' },
+      'IPCH STORED',
+      ),
+      inputActive: true,
+      inputKind: 'recalled',
+    };
+  }
+  if (key === 'stair') {
+    return setSequence(
+      { ...state, modifier: undefined },
+      'stairs',
+      [
+        { label: 'R-HT STORED', value: { amount: state.preferences.desiredRiser, power: 1, unit: 'in', system: 'imperial' } },
+        { label: 'T-WD STORED', value: { amount: state.preferences.treadWidth, power: 1, unit: 'in', system: 'imperial' } },
+        { label: 'HDRM STORED', value: { amount: state.preferences.headroom, power: 1, unit: 'ft-in', system: 'imperial' } },
+        { label: 'FLOR STORED', value: { amount: state.preferences.floorThickness, power: 1, unit: 'in', system: 'imperial' } },
+      ],
+      'stair',
+    );
+  }
   throw new CalcError('ENT Error');
 }
 
@@ -840,6 +947,7 @@ function handleSecondary(state: CalculatorState, key: KeyId): CalculatorState {
 }
 
 function primaryPress(state: CalculatorState, key: KeyId): CalculatorState {
+  if (key === '0' && state.sequence?.id === 'velocity') return advanceSequence(state);
   if (/^[0-9]$/.test(key)) return addDigit(state, key);
   switch (key) {
     case 'decimal': return addDecimal(state);
@@ -976,6 +1084,13 @@ export function calculatorReducer(state: CalculatorState, action: CalculatorActi
     }
     if (action.type === 'toggle-preferences') {
       return { ...state, preferencesOpen: action.open ?? !state.preferencesOpen };
+    }
+    if (action.type === 'reset-preferences') {
+      return {
+        ...state,
+        preferences: { ...DEFAULT_PREFERENCES },
+        display: state.current ? displayFor(state.current, DEFAULT_PREFERENCES, state.display.label) : state.display,
+      };
     }
     if (action.type === 'set-preference') {
       const current = state.preferences[action.key];

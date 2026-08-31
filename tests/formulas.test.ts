@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_PREFERENCES, evaluateExpression, measurement, nearlyEqual, scalar } from '@/lib/calculator/core';
+import { DEFAULT_PREFERENCES, evaluateExpression, formatValue, measurement, nearlyEqual, scalar } from '@/lib/calculator/core';
 import {
   arcResults,
   hipValleyResults,
@@ -32,6 +32,19 @@ describe('4090 dimensional math', () => {
     ]);
     expect(value.power).toBe(2);
     expect(value.amount / 144).toBeCloseTo(60.59375, 8);
+  });
+
+  it('honors the exponential display preference', () => {
+    expect(formatValue(scalar(20_000_000), DEFAULT_PREFERENCES).valueText).toContain('e');
+    expect(() => formatValue(scalar(20_000_000), { ...DEFAULT_PREFERENCES, exponent: false }))
+      .toThrow('0-fL0');
+  });
+
+  it('honors standard and forced area formats for square millimeters', () => {
+    const squareMillimeters = measurement(5, 'mm', 2);
+    expect(formatValue(squareMillimeters, DEFAULT_PREFERENCES).unitText).toBe('SQ MM');
+    expect(formatValue(squareMillimeters, { ...DEFAULT_PREFERENCES, areaFormat: 'sq-m' }).unitText).toBe('SQ M');
+    expect(formatValue(squareMillimeters, { ...DEFAULT_PREFERENCES, areaFormat: 'sq-ft' }).unitText).toBe('SQ FEET');
   });
 });
 
@@ -99,6 +112,16 @@ describe('official 4090 guide examples', () => {
     const jack6 = results.find((result) => result.label === 'JK6')!;
     expect(jack1.value.amount).toBeCloseTo(98.36, 1);
     expect(jack6.value.amount).toBeCloseTo(5.7885, 3);
+  });
+
+  it('mates irregular jack pairs at the same hip position', () => {
+    const preferences = { ...DEFAULT_PREFERENCES, irregularJackMode: 'mate' as const };
+    const results = jackRafterResults(48, 7 / 12, preferences, 8 / 12);
+    const regular = results.find((result) => result.label === 'JK1')!.value.amount;
+    const irregular = results.find((result) => result.label === 'IJ1')!.value.amount;
+    const regularPlan = regular / Math.sqrt(1 + (7 / 12) ** 2);
+    const irregularPlan = irregular / Math.sqrt(1 + (8 / 12) ** 2);
+    expect(regularPlan / 48).toBeCloseTo(irregularPlan / 42, 10);
   });
 
   it('matches the rise-only stair example', () => {

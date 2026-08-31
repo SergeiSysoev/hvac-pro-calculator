@@ -313,7 +313,10 @@ button { font: inherit; }
 .preferences-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 22px; }
 .preferences-grid label { display: grid; gap: 6px; color: #5e625f; font-size: 11px; font-weight: 720; }
 .preferences-grid select, .preferences-grid input { width: 100%; min-height: 44px; padding: 0 11px; border: 1px solid #c9c9c2; border-radius: 10px; color: #262a27; background: #fff; font-size: 13px; }
-.done-button { width: 100%; min-height: 46px; margin-top: 22px; border: 0; border-radius: 12px; color: #211e12; background: #e4c329; font-weight: 820; cursor: pointer; }
+.preferences-actions { display: grid; grid-template-columns: minmax(0, .7fr) minmax(0, 1fr); gap: 10px; margin-top: 22px; }
+.done-button, .reset-button { min-height: 46px; border-radius: 12px; font-weight: 820; cursor: pointer; }
+.done-button { border: 0; color: #211e12; background: #e4c329; }
+.reset-button { border: 1px solid #c8c8c0; color: #545854; background: #fff; }
 
 footer { max-width: 960px; margin: 22px auto 0; color: #727472; font-size: 10px; text-align: center; }
 

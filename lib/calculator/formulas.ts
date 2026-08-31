@@ -294,7 +294,10 @@ export function jackRafterResults(
     prefix: 'JK' | 'IJ',
     cheek: number,
   ): NamedResult[] => {
-    const decrement = preferences.onCenter * sideRun / otherRun;
+    const spacingBasis = irregularSlope && preferences.irregularJackMode === 'mate'
+      ? oppositeRun
+      : otherRun;
+    const decrement = preferences.onCenter * sideRun / spacingBasis;
     const values: NamedResult[] = [];
     for (let index = 1; index < 100; index += 1) {
       const horizontal = Math.max(0, sideRun - index * decrement);

@@ -385,6 +385,30 @@ export default function HvacCalculator() {
                 </select>
               </label>
               <label>
+                Irregular jack spacing
+                <select value={state.preferences.irregularJackMode} onChange={(event) => dispatch({ type: 'set-preference', key: 'irregularJackMode', value: event.target.value as 'oc-oc' | 'mate' })}>
+                  <option value="oc-oc">On-center both sides</option><option value="mate">Mate at hip / valley</option>
+                </select>
+              </label>
+              <label>
+                Exponential display
+                <select value={state.preferences.exponent ? 'on' : 'off'} onChange={(event) => dispatch({ type: 'set-preference', key: 'exponent', value: event.target.value === 'on' })}>
+                  <option value="on">On</option><option value="off">Off</option>
+                </select>
+              </label>
+              <label>
+                Meter display
+                <select value={state.preferences.meterDecimals} onChange={(event) => dispatch({ type: 'set-preference', key: 'meterDecimals', value: event.target.value as 'fixed-3' | 'float' })}>
+                  <option value="fixed-3">Fixed 0.000</option><option value="float">Floating decimals</option>
+                </select>
+              </label>
+              <label>
+                Degree display
+                <select value={state.preferences.degreeDecimals} onChange={(event) => dispatch({ type: 'set-preference', key: 'degreeDecimals', value: event.target.value as 'float' | 'fixed-2' })}>
+                  <option value="float">Floating decimals</option><option value="fixed-2">Fixed 0.00°</option>
+                </select>
+              </label>
+              <label>
                 On-center spacing (in)
                 <input type="number" min="1" step="0.25" value={state.preferences.onCenter} onChange={(event) => dispatch({ type: 'set-preference', key: 'onCenter', value: Number(event.target.value) })} />
               </label>
@@ -400,8 +424,15 @@ export default function HvacCalculator() {
                 Headroom (in)
                 <input type="number" min="1" step="1" value={state.preferences.headroom} onChange={(event) => dispatch({ type: 'set-preference', key: 'headroom', value: Number(event.target.value) })} />
               </label>
+              <label>
+                Floor thickness (in)
+                <input type="number" min="1" step="1" value={state.preferences.floorThickness} onChange={(event) => dispatch({ type: 'set-preference', key: 'floorThickness', value: Number(event.target.value) })} />
+              </label>
             </div>
-            <button type="button" className="done-button" onClick={() => dispatch({ type: 'toggle-preferences', open: false })}>Done</button>
+            <div className="preferences-actions">
+              <button type="button" className="reset-button" onClick={() => dispatch({ type: 'reset-preferences' })}>Reset defaults</button>
+              <button type="button" className="done-button" onClick={() => dispatch({ type: 'toggle-preferences', open: false })}>Done</button>
+            </div>
           </section>
         </div>
       ) : null}

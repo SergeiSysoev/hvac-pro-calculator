@@ -83,6 +83,31 @@ describe('physical keypad workflow', () => {
     expect(recalled.display.label).toBe('M1');
   });
 
+  it('recalls permanent regular and irregular pitches', () => {
+    const stored = run([
+      '7', 'inch', 'pitch',
+      '8', 'inch', 'conv', 'hip',
+      'on',
+    ]);
+    const regular = run(['recall', 'pitch'], stored);
+    const irregular = run(['recall', 'hip'], stored);
+    expect(regular.current?.amount).toBeCloseTo(7, 10);
+    expect(regular.display.label).toBe('PTCH STORED');
+    expect(irregular.current?.amount).toBeCloseTo(8, 10);
+    expect(irregular.display.label).toBe('IPCH STORED');
+  });
+
+  it('reviews all stored stair preferences', () => {
+    const riser = run(['recall', 'stair']);
+    const tread = run(['stair'], riser);
+    const headroom = run(['stair'], tread);
+    const floor = run(['stair'], headroom);
+    expect(riser.display.label).toBe('R-HT STORED');
+    expect(tread.display.label).toBe('T-WD STORED');
+    expect(headroom.display.label).toBe('HDRM STORED');
+    expect(floor.display.label).toBe('FLOR STORED');
+  });
+
   it('enters millimeters with Conv + m', () => {
     const state = run([...digits('254'), 'conv', 'meter']);
     expect(state.current?.amount).toBeCloseTo(10, 10);
@@ -139,5 +164,88 @@ describe('physical keypad workflow', () => {
     const state = run(['left', 'left', '2', 'add', '3', 'right', 'right', 'equals']);
     expect(state.current?.amount).toBe(5);
     expect(state.parenthesisDepth).toBe(0);
+  });
+
+  it('cycles VP, MPS, kPA and the original entry with plain 0', () => {
+    const fpm = run([...digits('500'), 'conv', '0']);
+    const vp = run(['0'], fpm);
+    const mps = run(['0'], vp);
+    const kpa = run(['0'], mps);
+    const entered = run(['0'], kpa);
+    expect(fpm.display.label).toBe('FPM');
+    expect(vp.current?.amount).toBeCloseTo(0.015586, 6);
+    expect(vp.display.label).toBe('VP');
+    expect(mps.display.label).toBe('MPS');
+    expect(kpa.display.label).toBe('kPA');
+    expect(entered.current?.amount).toBe(500);
+    expect(entered.display.label).toBe('ENTRY');
+  });
+
+  it('completes dimensional percentage calculations without equals', () => {
+    const state = run([
+      ...digits('500'), 'feet', 'multiply',
+      ...digits('18'), 'conv', 'add',
+    ]);
+    expect(state.current?.amount).toBeCloseTo(90 * 12, 10);
+    expect(state.current?.power).toBe(1);
+
+    const metric = run([
+      ...digits('350'), 'meter', 'divide',
+      ...digits('80'), 'conv', 'add',
+    ]);
+    expect(metric.current?.amount).toBeCloseTo(437.5 * 1000 / 25.4, 10);
+    expect(metric.display.valueText).toBe('437.500');
+    expect(metric.display.unitText).toBe('M');
+  });
+
+  it('enters and converts powered Inch and Millimeter units', () => {
+    const squareInches = run(['1', '4', 'feet', 'feet', 'conv', 'inch']);
+    expect(squareInches.display.valueText).toBe('2016.');
+    expect(squareInches.display.unitText).toBe('SQ INCH');
+
+    const squareMeters = run(['meter'], squareInches);
+    expect(squareMeters.current?.amount).toBeCloseTo(2016, 10);
+    expect(squareMeters.display.unitText).toBe('SQ M');
+
+    const squareMillimeters = run(['conv', 'meter'], squareMeters);
+    expect(squareMillimeters.display.valueText).toBe('1300642.56');
+    expect(squareMillimeters.display.unitText).toBe('SQ MM');
+
+    const enteredSquareMillimeters = run(['5', 'conv', 'meter', 'meter']);
+    expect(enteredSquareMillimeters.current?.power).toBe(2);
+    expect(enteredSquareMillimeters.display.valueText).toBe('5.');
+    expect(enteredSquareMillimeters.display.unitText).toBe('SQ MM');
+  });
+
+  it('preserves homogeneous Inch units through multiplication', () => {
+    const state = run(['5', 'inch', 'multiply', '6', 'inch', 'equals']);
+    expect(state.current?.amount).toBe(30);
+    expect(state.display.valueText).toBe('30.');
+    expect(state.display.unitText).toBe('SQ INCH');
+  });
+
+  it('recalls A, B, C and the stored fraction setting', () => {
+    const stored = run(['2', '5', 'inch', 'conv', '6', 'on']);
+    const recalled = run(['recall', '6'], stored);
+    const enteredAsDiagonal = run(['equals', 'diag'], recalled);
+    const fraction = run(['recall', 'fraction'], stored);
+    expect(recalled.current?.amount).toBe(25);
+    expect(recalled.display.label).toBe('C STORED');
+    expect(enteredAsDiagonal.triangle.r).toBe(25);
+    expect(fraction.current?.amount).toBe(1 / 16);
+    expect(fraction.display.label).toBe('STD');
+  });
+
+  it('Clear All resets permanent key entries and can factory-reset preferences', () => {
+    let custom = initialCalculatorState();
+    custom = calculatorReducer(custom, { type: 'set-preference', key: 'onCenter', value: 24 });
+    custom = calculatorReducer(custom, { type: 'set-preference', key: 'desiredRiser', value: 8 });
+    custom = calculatorReducer(custom, { type: 'set-preference', key: 'treadWidth', value: 11 });
+    const cleared = run(['conv', 'multiply'], custom);
+    expect(cleared.preferences.onCenter).toBe(16);
+    expect(cleared.preferences.desiredRiser).toBe(7.5);
+    expect(cleared.preferences.treadWidth).toBe(11);
+    const reset = calculatorReducer(cleared, { type: 'reset-preferences' });
+    expect(reset.preferences.treadWidth).toBe(10);
   });
 });
