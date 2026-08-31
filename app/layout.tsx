@@ -2,8 +2,9 @@ import type { Metadata } from 'next';
 import { Geist, Geist_Mono } from 'next/font/google';
 import './globals.css';
 
+const publicBasePath = process.env.NEXT_PUBLIC_BASE_PATH ?? '';
 const socialImage =
-  'https://raw.githubusercontent.com/SergeiSysoev/hvac-pro-calc-4090/main/public/og.png';
+  'https://sergeisysoev.github.io/hvac-pro-calculator/og.png';
 
 const geistSans = Geist({
   variable: '--font-geist-sans',
@@ -20,8 +21,11 @@ export const metadata: Metadata = {
   description:
     'An independent 4090-compatible calculator for sheet metal, HVAC, dimensional math, fan laws and field geometry.',
   applicationName: 'HVAC 4090 Pro',
-  manifest: '/manifest.webmanifest',
-  icons: { icon: '/og.png', apple: '/og.png' },
+  manifest: `${publicBasePath}/manifest.webmanifest`,
+  icons: {
+    icon: `${publicBasePath}/og.png`,
+    apple: `${publicBasePath}/og.png`,
+  },
   appleWebApp: {
     capable: true,
     statusBarStyle: 'black-translucent',

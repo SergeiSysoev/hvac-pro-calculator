@@ -1,5 +1,7 @@
-const CACHE_NAME = 'hvac-4090-pro-v1';
-const APP_SHELL = ['/', '/manifest.webmanifest', '/og.png'];
+const CACHE_NAME = 'hvac-4090-pro-v2';
+const BASE_PATH = new URL(self.registration.scope).pathname.replace(/\/$/, '');
+const scoped = (path) => `${BASE_PATH}${path}`;
+const APP_SHELL = [scoped('/'), scoped('/manifest.webmanifest'), scoped('/og.png')];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)));
@@ -24,6 +26,6 @@ self.addEventListener('fetch', (event) => {
         caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
         return response;
       })
-      .catch(() => caches.match(event.request).then((cached) => cached || caches.match('/'))),
+      .catch(() => caches.match(event.request).then((cached) => cached || caches.match(scoped('/')))),
   );
 });

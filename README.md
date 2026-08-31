@@ -2,6 +2,8 @@
 
 An independent, browser-based calculator compatible with the working method of the Calculated Industries Model 4090. It recreates the dual-function keypad workflow for sheet-metal geometry, HVAC test-and-balance math, dimensional calculations, and construction layout.
 
+Live site: [https://sergeisysoev.github.io/hvac-pro-calculator/](https://sergeisysoev.github.io/hvac-pro-calculator/)
+
 ## What it includes
 
 - Feet, inches, fractions, decimal feet/inches, meters, and millimeters

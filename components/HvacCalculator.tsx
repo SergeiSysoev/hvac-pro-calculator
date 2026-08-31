@@ -78,6 +78,7 @@ const KEY_ROWS: KeyFace[][] = [
 ];
 
 const STORAGE_KEY = 'hvac-4090-pro-state-v1';
+const PUBLIC_BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? '';
 
 const KEYBOARD_MAP: Record<string, KeyId> = {
   '0': '0', '1': '1', '2': '2', '3': '3', '4': '4',
@@ -120,7 +121,9 @@ export default function HvacCalculator() {
 
   useEffect(() => {
     if ('serviceWorker' in navigator && window.location.protocol === 'https:') {
-      navigator.serviceWorker.register('/sw.js').catch(() => undefined);
+      navigator.serviceWorker.register(`${PUBLIC_BASE_PATH}/sw.js`, {
+        scope: `${PUBLIC_BASE_PATH}/`,
+      }).catch(() => undefined);
     }
   }, []);
 
