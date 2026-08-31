@@ -1,0 +1,17 @@
+{
+  "name": "HVAC 4090 Pro — Web Field Calculator",
+  "short_name": "HVAC 4090",
+  "description": "Independent 4090-compatible field calculator for sheet metal and HVAC work.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#d9d8d2",
+  "theme_color": "#f3c400",
+  "icons": [
+    {
+      "src": "/og.png",
+      "sizes": "any",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
