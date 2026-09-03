@@ -16,9 +16,15 @@ export interface KeyFace {
 
 interface CalculatorKeypadProps {
   keys: KeyFace[];
-  modifier?: 'convert' | 'recall';
+  modifier?: 'convert' | 'recall' | 'recall-convert';
   onAction: (action: KeyAction) => void;
   onPress: (key: KeyId, converted?: boolean) => void;
+}
+
+export function accessibleKeyLabel(face: KeyFace): string {
+  const detail = face.detail ? ` ${face.detail}` : '';
+  const converted = face.secondary ? `; Conv function ${face.secondary}` : '';
+  return `${face.label}${detail}${converted}`;
 }
 
 export default function CalculatorKeypad({
@@ -28,16 +34,15 @@ export default function CalculatorKeypad({
   onPress,
 }: CalculatorKeypadProps) {
   return (
-    <div className="keypad" role="group" aria-label="Calculator keypad">
+    <div className="trade-keypad" role="group" aria-label="Calculator keypad">
       {keys.map((face) => {
-        const convertedLabel = face.secondary ? `; Conv function ${face.secondary}` : '';
         const latched = face.key === 'conv' && modifier === 'convert';
         return (
           <button
             type="button"
             key={face.id}
             className={`calc-key key-${face.tone ?? 'utility'} ${latched ? 'is-latched' : ''}`}
-            aria-label={`${face.label}${convertedLabel}`}
+            aria-label={accessibleKeyLabel(face)}
             aria-pressed={face.key === 'conv' ? latched : undefined}
             data-key={face.key}
             data-action={face.action}

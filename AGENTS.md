@@ -2,7 +2,7 @@
 
 ## Role
 
-Maintain an accurate, independent, installable HVAC field calculator with three full-screen tools: Scientific, Trade and Duct.
+Maintain an accurate, independent, installable HVAC field calculator with three full-screen tools: HVAC, Trade and Duct.
 
 ## Product rules
 

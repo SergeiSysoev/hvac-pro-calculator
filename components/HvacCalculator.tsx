@@ -15,6 +15,7 @@ import CalculatorKeypad, {
   KeyFace,
 } from '@/components/calculator/CalculatorKeypad';
 import DuctCalculator from '@/components/calculator/DuctCalculator';
+import PhysicalCalculator from '@/components/calculator/PhysicalCalculator';
 import PreferencesDialog from '@/components/calculator/PreferencesDialog';
 import { projectedPageIndex, rubberBandDistance } from '@/lib/carousel';
 import {
@@ -27,7 +28,7 @@ import {
 const STORAGE_KEY = 'hvac-pro-calculator-state-v2';
 const LEGACY_STORAGE_KEY = 'hvac-4090-pro-state-v1';
 const PUBLIC_BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? '';
-const PAGE_NAMES = ['Scientific', 'Trade', 'Duct'] as const;
+const PAGE_NAMES = ['HVAC', 'Trade', 'Duct'] as const;
 
 const KEYBOARD_MAP: Record<string, KeyId> = {
   '0': '0', '1': '1', '2': '2', '3': '3', '4': '4',
@@ -37,57 +38,51 @@ const KEYBOARD_MAP: Record<string, KeyId> = {
   Backspace: 'backspace', Escape: 'on', '(': 'left', ')': 'right',
 };
 
-function scientificKeys(accuracy: number): KeyFace[] {
-  return [
-    { id: 's-off', label: 'Off', key: 'off', tone: 'dark' },
-    { id: 's-on', label: 'On/C', key: 'on', tone: 'danger' },
-    { id: 's-left', label: '(', key: 'left', secondary: 'Offset', tone: 'dark' },
-    { id: 's-right', label: ')', key: 'right', secondary: 'Col/Cone', tone: 'dark' },
-    { id: 's-back', label: '←', key: 'backspace', tone: 'dark' },
-    { id: 's-pi', label: 'π', key: 'pi', secondary: 'ArcK', tone: 'dark' },
+const INTERACTIVE_KEY_TARGETS = [
+  'button',
+  'a[href]',
+  'input:not([type="hidden"])',
+  'select',
+  'textarea',
+  'summary',
+  '[controls]',
+  '[contenteditable]:not([contenteditable="false"])',
+  '[role="button"]',
+  '[role="link"]',
+  '[role="checkbox"]',
+  '[role="radio"]',
+  '[role="switch"]',
+  '[role="slider"]',
+  '[role="spinbutton"]',
+  '[role="textbox"]',
+  '[role="combobox"]',
+  '[role="menuitem"]',
+  '[role="option"]',
+  '[tabindex]:not([tabindex="-1"])',
+].join(', ');
 
-    { id: 's-x', label: 'x', key: 'run', secondary: 'Fan 1', detail: 'Run' },
-    { id: 's-y', label: 'y', key: 'rise', secondary: 'Fan 2', detail: 'Rise' },
-    { id: 's-r', label: 'r', key: 'diag', secondary: 'Fan 3', detail: 'Diag' },
-    { id: 's-theta', label: 'θ', key: 'pitch', secondary: 'Seg Rad', detail: 'Pitch' },
-    { id: 's-circ', label: 'Circ', key: 'circ', secondary: 'Arc' },
-    { id: 's-square', label: 'x²', key: 'square', secondary: 'x³' },
+type KeyboardEventTarget = EventTarget & {
+  closest?: (selector: string) => Element | null;
+  isContentEditable?: boolean;
+};
 
-    { id: 's-sin', label: 'Sin', key: 'sin', secondary: 'ArcSin' },
-    { id: 's-cos', label: 'Cos', key: 'cos', secondary: 'ArcCos' },
-    { id: 's-tan', label: 'Tan', key: 'tan', secondary: 'ArcTan' },
-    { id: 's-root', label: '√', key: 'sqrt', secondary: '³√' },
-    { id: 's-feet', label: 'Feet', key: 'feet', tone: 'dark' },
-    { id: 's-inch', label: 'Inch', key: 'inch', tone: 'dark' },
+export function isInteractiveKeyboardTarget(target: EventTarget | null): boolean {
+  if (!target) return false;
+  const candidate = target as KeyboardEventTarget;
+  if (candidate.isContentEditable) return true;
+  return typeof candidate.closest === 'function'
+    && candidate.closest(INTERACTIVE_KEY_TARGETS) !== null;
+}
 
-    { id: 's-conv', label: 'Conv', key: 'conv', tone: 'accent' },
-    { id: 's-recall', label: 'Rcl', key: 'recall', secondary: 'Swap M+', tone: 'dark' },
-    { id: 's-7', label: '7', key: '7', secondary: 'A new', tone: 'number' },
-    { id: 's-8', label: '8', key: '8', secondary: 'B new', tone: 'number' },
-    { id: 's-9', label: '9', key: '9', secondary: 'LawCos', tone: 'number' },
-    { id: 's-divide', label: '÷', key: 'divide', secondary: '1/x', tone: 'dark' },
-
-    { id: 's-memory', label: 'M+', key: 'mplus', secondary: 'M−', tone: 'dark' },
-    { id: 's-fraction', label: '/', key: 'fraction', secondary: 'x10ʸ', tone: 'dark' },
-    { id: 's-4', label: '4', key: '4', secondary: 'A', tone: 'number' },
-    { id: 's-5', label: '5', key: '5', secondary: 'B', tone: 'number' },
-    { id: 's-6', label: '6', key: '6', secondary: 'C', tone: 'number' },
-    { id: 's-multiply', label: '×', key: 'multiply', secondary: 'Clear All', tone: 'dark' },
-
-    { id: 's-clear', label: 'C', key: 'on', tone: 'dark' },
-    { id: 's-sign', label: '+/−', key: 'subtract', converted: true, tone: 'dark' },
-    { id: 's-1', label: '1', key: '1', secondary: 'M1', tone: 'number' },
-    { id: 's-2', label: '2', key: '2', secondary: 'M2', tone: 'number' },
-    { id: 's-3', label: '3', key: '3', secondary: 'M3', tone: 'number' },
-    { id: 's-subtract', label: '−', key: 'subtract', tone: 'dark' },
-
-    { id: 's-meter', label: 'm', key: 'meter', secondary: 'mm', tone: 'dark' },
-    { id: 's-accuracy', label: `1/${accuracy}`, action: 'accuracy', tone: 'dark' },
-    { id: 's-0', label: '0', key: '0', secondary: 'VP/FPM', tone: 'number' },
-    { id: 's-decimal', label: '•', key: 'decimal', secondary: 'dms/deg', tone: 'number' },
-    { id: 's-equals', label: '=', key: 'equals', secondary: 'Prefs', tone: 'number' },
-    { id: 's-add', label: '+', key: 'add', secondary: '%', tone: 'dark' },
-  ];
+export function calculatorKeyForKeyboardEvent(
+  eventKey: string,
+  target: EventTarget | null,
+  activeElement: EventTarget | null,
+): KeyId | undefined {
+  if (isInteractiveKeyboardTarget(target) || isInteractiveKeyboardTarget(activeElement)) {
+    return undefined;
+  }
+  return KEYBOARD_MAP[eventKey];
 }
 
 function tradeKeys(accuracy: number): KeyFace[] {
@@ -277,13 +272,6 @@ export default function HvacCalculator() {
   }, []);
 
   const press = useCallback((key: KeyId, forceConverted = false) => {
-    if (
-      key === 'equals' &&
-      (forceConverted || state.modifier === 'convert' || state.modifier === 'recall') &&
-      document.activeElement instanceof HTMLElement
-    ) {
-      preferencesOpener.current = document.activeElement;
-    }
     if (forceConverted && state.modifier !== 'convert') dispatch({ type: 'press', key: 'conv' });
     dispatch({ type: 'press', key });
     if ('vibrate' in navigator) navigator.vibrate?.(7);
@@ -314,8 +302,7 @@ export default function HvacCalculator() {
         return;
       }
       if (state.preferencesOpen || activePage === 2) return;
-      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement) return;
-      const key = KEYBOARD_MAP[event.key];
+      const key = calculatorKeyForKeyboardEvent(event.key, event.target, document.activeElement);
       if (!key) return;
       event.preventDefault();
       press(key);
@@ -352,10 +339,6 @@ export default function HvacCalculator() {
     };
   }, [state.preferencesOpen]);
 
-  const scientific = useMemo(
-    () => scientificKeys(state.preferences.fractionDenominator),
-    [state.preferences.fractionDenominator],
-  );
   const trade = useMemo(
     () => tradeKeys(state.preferences.fractionDenominator),
     [state.preferences.fractionDenominator],
@@ -438,19 +421,6 @@ export default function HvacCalculator() {
   return (
     <main className="app-frame">
       <div className="app-surface" aria-hidden={state.preferencesOpen} inert={state.preferencesOpen}>
-        <header className="app-header">
-        <div className="brand-lockup">
-          <span className="brand-badge" aria-hidden="true">HV</span>
-          <div>
-            <strong>HVAC PRO CALC</strong>
-            <span>{PAGE_NAMES[activePage]} calculator</span>
-          </div>
-        </div>
-        <button type="button" className="settings-button" aria-label="Open calculator preferences" onClick={openPreferences}>
-          <span aria-hidden="true">⚙</span>
-        </button>
-        </header>
-
         <div
           ref={viewport}
           className="carousel-viewport"
@@ -469,15 +439,23 @@ export default function HvacCalculator() {
           className={`carousel-track ${dragging ? 'is-dragging' : ''}`}
           style={{ transform: `translate3d(${trackOffset}px, 0, 0)` }}
         >
-          <section className="calculator-page" aria-label="Scientific calculator" aria-hidden={activePage !== 0} inert={activePage !== 0}>
-            <div className="page-scroll keypad-page">
-              <CalculatorDisplay active={activePage === 0} state={state} />
-              <CalculatorKeypad keys={scientific} modifier={state.modifier} onAction={handleAction} onPress={press} />
+          <section className="calculator-page" aria-label="Professional HVAC calculator" aria-hidden={activePage !== 0} inert={activePage !== 0}>
+            <div className="page-scroll physical-page">
+              <PhysicalCalculator active={activePage === 0} state={state} onPress={press} />
             </div>
           </section>
 
           <section className="calculator-page" aria-label="Trade calculator" aria-hidden={activePage !== 1} inert={activePage !== 1}>
             <div className="page-scroll keypad-page">
+              <div className="page-title-row">
+                <div>
+                  <span>PROFESSIONAL HVAC</span>
+                  <strong>Trade calculator</strong>
+                </div>
+                <button type="button" className="settings-button" aria-label="Open calculator preferences" onClick={openPreferences}>
+                  <span aria-hidden="true">⚙</span>
+                </button>
+              </div>
               <CalculatorDisplay active={activePage === 1} state={state} />
               <CalculatorKeypad keys={trade} modifier={state.modifier} onAction={handleAction} onPress={press} />
             </div>

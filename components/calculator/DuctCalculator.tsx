@@ -13,6 +13,7 @@ import {
 } from '@/lib/calculator/duct';
 
 const STORAGE_KEY = 'hvac-pro-duct-state-v1';
+const DUCT_ERROR_ID = 'duct-input-error';
 const DUCT_FIELDS: DuctField[] = ['airflowCfm', 'frictionRate', 'velocityFpm', 'diameterIn'];
 
 const FIELD_DETAILS: Record<DuctField, {
@@ -65,7 +66,9 @@ export default function DuctCalculator() {
           setUnitSystem(saved.unitSystem);
         }
         if (Array.isArray(saved?.manualOrder)) {
-          setManualOrder(saved.manualOrder.filter((field) => DUCT_FIELDS.includes(field)).slice(-2));
+          setManualOrder([...new Set(
+            saved.manualOrder.filter((field) => DUCT_FIELDS.includes(field)),
+          )].slice(-2));
         }
         if (saved?.rawValues) {
           setRawValues(Object.fromEntries(DUCT_FIELDS.map((field) => [
@@ -92,21 +95,37 @@ export default function DuctCalculator() {
   }, [manualOrder, rawValues, storageReady, unitSystem]);
 
   const result = (() => {
-    if (manualOrder.length !== 2) return { solution: undefined, error: undefined };
+    if (manualOrder.length !== 2) {
+      return { solution: undefined, error: undefined, invalidFields: [] as DuctField[] };
+    }
     const inputs: Partial<Record<DuctField, number>> = {};
+    const invalidFields = manualOrder.filter((field) => {
+      const value = parseDuctEntry(rawValues[field]);
+      return value === undefined || value <= 0;
+    });
+    if (invalidFields.length) {
+      return {
+        solution: undefined,
+        error: 'Use positive numbers in both input fields.',
+        invalidFields,
+      };
+    }
     for (const field of manualOrder) {
       const displayValue = parseDuctEntry(rawValues[field]);
-      if (displayValue === undefined || displayValue <= 0) {
-        return { solution: undefined, error: 'Use positive numbers in both input fields.' };
-      }
+      if (displayValue === undefined) continue;
       inputs[field] = displayToImperialValue(field, displayValue, unitSystem);
     }
     try {
-      return { solution: solveRoundDuct(inputs), error: undefined };
+      return {
+        solution: solveRoundDuct(inputs),
+        error: undefined,
+        invalidFields: [] as DuctField[],
+      };
     } catch (error) {
       return {
         solution: undefined,
         error: error instanceof Error ? error.message : 'These values could not be solved.',
+        invalidFields: [...manualOrder],
       };
     }
   })();
@@ -177,6 +196,7 @@ export default function DuctCalculator() {
         {DUCT_FIELDS.map((field, index) => {
           const details = FIELD_DETAILS[field];
           const manual = manualOrder.includes(field);
+          const invalid = result.invalidFields.includes(field);
           const unit = unitSystem === 'imperial' ? details.imperialUnit : details.siUnit;
           return (
             <label className={`duct-field ${manual ? 'is-input' : result.solution ? 'is-solved' : ''}`} key={field}>
@@ -192,6 +212,8 @@ export default function DuctCalculator() {
                   autoComplete="off"
                   spellCheck={false}
                   aria-label={`${details.label}, ${unit}`}
+                  aria-invalid={invalid || undefined}
+                  aria-describedby={invalid ? DUCT_ERROR_ID : undefined}
                   value={displayedValue(field)}
                   placeholder={manualOrder.length < 2 || manual ? details.placeholder : ''}
                   onFocus={() => makeManual(field)}
@@ -207,7 +229,7 @@ export default function DuctCalculator() {
 
       <div className="duct-helper" aria-live="polite">
         <span className="input-count">{manualOrder.length}/2</span>
-        <p>{result.error ?? (result.solution
+        <p id={result.error ? DUCT_ERROR_ID : undefined}>{result.error ?? (result.solution
           ? 'Solved. Tap any result to replace the oldest input.'
           : 'Enter any two values. The other two solve automatically.')}</p>
       </div>

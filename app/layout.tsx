@@ -19,7 +19,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: 'Professional HVAC Calculator',
   description:
-    'A professional full-screen HVAC field calculator with scientific, trade geometry and ASHRAE equal-friction duct tools.',
+    'A professional full-screen HVAC field calculator with sheet-metal, trade geometry and ASHRAE equal-friction duct tools.',
   applicationName: 'Professional HVAC Calculator',
   manifest: `${publicBasePath}/manifest.webmanifest`,
   icons: {
@@ -33,19 +33,19 @@ export const metadata: Metadata = {
   },
   openGraph: {
     title: 'Professional HVAC Calculator',
-    description: 'Scientific math, sheet-metal trade geometry and ASHRAE equal-friction duct sizing in your browser.',
+    description: 'Sheet-metal math, trade geometry and ASHRAE equal-friction duct sizing in your browser.',
     type: 'website',
     images: [{
       url: socialImage,
       width: 1736,
       height: 906,
-      alt: 'Professional HVAC Calculator — Scientific, Trade and Duct tools',
+      alt: 'Professional HVAC Calculator — Sheet Metal, Trade and Duct tools',
     }],
   },
   twitter: {
     card: 'summary_large_image',
     title: 'Professional HVAC Calculator',
-    description: 'Scientific math, sheet-metal trade geometry and ASHRAE equal-friction duct sizing in your browser.',
+    description: 'Sheet-metal math, trade geometry and ASHRAE equal-friction duct sizing in your browser.',
     images: [socialImage],
   },
 };

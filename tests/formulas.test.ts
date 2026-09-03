@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_PREFERENCES, evaluateExpression, formatValue, measurement, nearlyEqual, scalar } from '@/lib/calculator/core';
+import { DEFAULT_PREFERENCES, degrees, evaluateExpression, formatValue, measurement, nearlyEqual, operate, scalar } from '@/lib/calculator/core';
 import {
   arcResults,
+  convertDms,
   hipValleyResults,
   jackRafterResults,
   lawOfCosines,
@@ -47,6 +48,61 @@ describe('professional HVAC dimensional math', () => {
       .toBe('0.00000001');
   });
 
+  it('fits scalar and angle results to the physical display digit budget', () => {
+    expect(formatValue(scalar((500 / 1.3) ** 2), DEFAULT_PREFERENCES).valueText)
+      .toBe('147928.99');
+    expect(formatValue(degrees(101.568715462), DEFAULT_PREFERENCES).valueText)
+      .toBe('101.5687');
+  });
+
+  it('fits powered and fixed-meter results to the physical display digit budget', () => {
+    const squareFeetAsMillimeters = { ...measurement(14, 'ft', 2), unit: 'sq-mm' as const };
+    expect(formatValue(squareFeetAsMillimeters, DEFAULT_PREFERENCES).valueText)
+      .toBe('1300642.56');
+    expect(formatValue({
+      amount: 19_999_999.99,
+      power: 2,
+      unit: 'sq-in',
+      system: 'imperial',
+    }, DEFAULT_PREFERENCES).valueText).toBe('19999999.99');
+    expect(formatValue(measurement(123456.789, 'm'), {
+      ...DEFAULT_PREFERENCES,
+      meterDecimals: 'fixed-3',
+    }).valueText).toBe('123456.79');
+  });
+
+  it('preserves dimensional unit provenance across chained arithmetic', () => {
+    const sum = operate(measurement(2, 'in'), '+', measurement(3, 'in'));
+    const area = operate(sum, '*', measurement(4, 'in'));
+    expect(area.power).toBe(2);
+    expect(area.unit).toBe('sq-in');
+    expect(area.source).toEqual({ amount: 20, unit: 'in', power: 2 });
+  });
+
+  it('promotes mixed imperial addition to standard feet-and-inches', () => {
+    const sum = operate(measurement(11, 'in'), '+', measurement(25, 'in'));
+    const mixed = operate(measurement(11, 'in'), '+', measurement(2 + 1 / 12, 'ft'));
+    expect(formatValue(sum, DEFAULT_PREFERENCES).unitText).toBe('INCH');
+    expect(formatValue(mixed, DEFAULT_PREFERENCES)).toMatchObject({
+      valueText: '3  0',
+      unitText: 'FEET        INCH',
+    });
+  });
+
+  it('auto-ranges overflowing dimensional values to the next larger unit', () => {
+    const millimeters = measurement(20_000_000, 'mm');
+    const metric = formatValue(millimeters, { ...DEFAULT_PREFERENCES, exponent: false });
+    expect(metric.valueText).toBe('20000.000');
+    expect(metric.unitText).toBe('M');
+
+    const inches = formatValue(measurement(20_000_000, 'in'), {
+      ...DEFAULT_PREFERENCES,
+      exponent: false,
+    });
+    expect(inches.valueText).toBe('1666667');
+    expect(inches.unitText).toBe('FEET');
+  });
+
   it('honors standard and forced area formats for square millimeters', () => {
     const squareMillimeters = measurement(5, 'mm', 2);
     expect(formatValue(squareMillimeters, DEFAULT_PREFERENCES).unitText).toBe('SQ MM');
@@ -60,6 +116,53 @@ describe('published field-calculator guide examples', () => {
     const solved = solveRightTriangle({ x: 144, y: 108 });
     expect(solved.r).toBe(180);
     expect(solved.theta).toBeCloseTo(36.86989765, 7);
+  });
+
+  it('solves valid side-angle and hypotenuse-angle right triangles', () => {
+    expect(solveRightTriangle({ x: 12, theta: 45 })).toMatchObject({
+      x: 12,
+      y: expect.closeTo(12, 10),
+      r: expect.closeTo(12 * Math.SQRT2, 10),
+      theta: 45,
+    });
+    expect(solveRightTriangle({ r: 10, theta: 30 })).toMatchObject({
+      x: expect.closeTo(5 * Math.sqrt(3), 10),
+      y: expect.closeTo(5, 10),
+      r: 10,
+      theta: 30,
+    });
+  });
+
+  it('accepts consistent overdetermined right-triangle values', () => {
+    const theta = Math.atan2(4, 3) * 180 / Math.PI;
+    expect(solveRightTriangle({ x: 3, y: 4, r: 5, theta })).toEqual({
+      x: 3,
+      y: 4,
+      r: 5,
+      theta,
+    });
+  });
+
+  it.each([
+    { x: 0, y: 12 },
+    { x: -3, theta: 30 },
+    { y: 4, r: 0 },
+    { y: Number.POSITIVE_INFINITY, r: 10 },
+  ])('rejects non-positive or non-finite sides: %o', (values) => {
+    expect(() => solveRightTriangle(values)).toThrow('ENT Error');
+  });
+
+  it.each([0, -1, 90, 120, Number.NaN])('rejects singular or invalid angle %s', (theta) => {
+    expect(() => solveRightTriangle({ x: 12, theta })).toThrow('ENT Error');
+  });
+
+  it.each([
+    { x: 3, y: 4, r: 6 },
+    { x: 3, y: 4, theta: 45 },
+    { x: 3, r: 5, theta: 60 },
+    { y: 4, r: 5, theta: 45 },
+  ])('rejects contradictory overdetermined geometry: %o', (values) => {
+    expect(() => solveRightTriangle(values)).toThrow('ENT Error');
   });
 
   it('solves Law of Cosines and Heron area', () => {
@@ -131,6 +234,42 @@ describe('published field-calculator guide examples', () => {
     expect(regularPlan / 48).toBeCloseTo(irregularPlan / 42, 10);
   });
 
+  it('places the matching on-center marker before each irregular jack side', () => {
+    const jackLabels = (irregularFirst: boolean) => jackRafterResults(
+      48,
+      7 / 12,
+      DEFAULT_PREFERENCES,
+      8 / 12,
+      irregularFirst,
+    )
+      .map((result) => result.label)
+      .filter((label) => /^(?:JKOC|IJOC|JK\d+|IJ\d+)$/.test(label));
+
+    expect(jackLabels(false)).toEqual([
+      'JKOC', 'JK1', 'JK2', 'JK3',
+      'IJOC', 'IJ1', 'IJ2', 'IJ3',
+    ]);
+    expect(jackLabels(true)).toEqual([
+      'IJOC', 'IJ1', 'IJ2', 'IJ3',
+      'JKOC', 'JK1', 'JK2', 'JK3',
+    ]);
+  });
+
+  it('keeps fixed on-center, riser, and tread dimensions in their documented units', () => {
+    const jacks = jackRafterResults(48, 7 / 12, DEFAULT_PREFERENCES, 8 / 12);
+    expect(jacks.filter((result) => result.label.endsWith('OC')).map((result) => result.value.unit))
+      .toEqual(['in', 'in']);
+    expect(arcResults({ radius: 30, arcLength: 39 }).find((result) => result.label === 'OC')?.value.unit)
+      .toBe('in');
+
+    const stairs = stairResults(119, undefined, DEFAULT_PREFERENCES);
+    const unit = (label: string) => stairs.find((result) => result.label === label)?.value.unit;
+    expect(['R-HT', 'R+/−', 'T-WD', 'T+/−', 'R-HT STORED', 'T-WD STORED', 'FLOR STORED'].map(unit))
+      .toEqual(['in', 'in', 'in', 'in', 'in', 'in', 'in']);
+    expect(unit('HDRM STORED')).toBe('ft-in');
+    expect(['OPEN', 'STRG', 'RUN', 'RISE'].map(unit)).toEqual(['auto', 'auto', 'auto', 'auto']);
+  });
+
   it('matches the rise-only stair example', () => {
     const results = stairResults(119, undefined, DEFAULT_PREFERENCES);
     const find = (label: string) => results.find((result) => result.label === label)!.value.amount;
@@ -140,6 +279,34 @@ describe('published field-calculator guide examples', () => {
     expect(find('RUN')).toBe(150);
     expect(nearlyEqual(find('STRG'), 186.94, 0.001)).toBe(true);
     expect(find('INCL')).toBeCloseTo(36.64003, 5);
+  });
+
+  it('keeps an atypical stair-ratio warning on every result in the cycle', () => {
+    const atypical = stairResults(60, 20, DEFAULT_PREFERENCES);
+    expect(atypical).toHaveLength(15);
+    expect(atypical.every((result) => result.note === 'Steep/atypical stair ratio')).toBe(true);
+
+    const proportional = stairResults(24, 12, {
+      ...DEFAULT_PREFERENCES,
+      desiredRiser: 10,
+      treadWidth: 10,
+    });
+    expect(proportional.every((result) => result.note === undefined)).toBe(true);
+
+    const overThreshold = stairResults(20, 9, {
+      ...DEFAULT_PREFERENCES,
+      desiredRiser: 10,
+      treadWidth: 10,
+    });
+    expect(overThreshold.every((result) => result.note === 'Steep/atypical stair ratio')).toBe(true);
+
+    const normal = stairResults(119, undefined, DEFAULT_PREFERENCES);
+    expect(normal.every((result) => result.note === undefined)).toBe(true);
+  });
+
+  it('normalizes D:M:S rounding across degree boundaries', () => {
+    expect(convertDms(23.999999, false)).toBe(24);
+    expect(convertDms(-23.999999, false)).toBe(-24);
   });
 
   it('rejects non-positive stair geometry', () => {

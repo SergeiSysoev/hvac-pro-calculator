@@ -6,7 +6,7 @@ Live site: [https://sergeisysoev.github.io/hvac-pro-calculator/](https://sergeis
 
 ## Three calculator screens
 
-- **Scientific** — feet, inches, fractions, metric units, dimensional arithmetic, trigonometry, memory and right-triangle solving.
+- **HVAC** — a faithful five-column professional sheet-metal calculator with feet, inches, fractions, metric units, dimensional arithmetic, trigonometry, memory and right-triangle solving.
 - **Trade** — offsets, circle/arc/segment layout, column/cone work, fan laws, hip/jack geometry and stair layout.
 - **Duct** — enter any two of airflow, friction rate, velocity and round diameter; the other two solve automatically. Includes Imperial/SI conversion and equivalent rectangular sizes.
 

@@ -133,7 +133,9 @@ export function cloneValue(value: CalcValue): CalcValue {
 }
 
 function compatibleForAdd(a: CalcValue, b: CalcValue): boolean {
-  return a.power === b.power && Boolean(a.angle) === Boolean(b.angle);
+  return a.power === b.power && (
+    Boolean(a.angle) === Boolean(b.angle) || a.power === 0
+  );
 }
 
 function combinedSystem(a: CalcValue, b: CalcValue): MeasurementSystem {
@@ -143,15 +145,44 @@ function combinedSystem(a: CalcValue, b: CalcValue): MeasurementSystem {
   return 'imperial';
 }
 
+function standardComputedUnit(unit: UnitHint): UnitHint {
+  if (unit === 'decimal-ft') return 'ft-in';
+  if (unit === 'decimal-in') return 'in';
+  return unit;
+}
+
+function preferredAddSourceUnit(a: CalcValue, b: CalcValue): 'ft' | 'in' | 'm' | 'mm' | undefined {
+  const aUnit = a.source?.unit ?? baseUnitFromHint(a.unit);
+  const bUnit = b.source?.unit ?? baseUnitFromHint(b.unit);
+  if (!aUnit) return bUnit;
+  if (!bUnit) return aUnit;
+  const imperial = (unit: typeof aUnit) => unit === 'ft' || unit === 'in';
+  if (imperial(aUnit) && imperial(bUnit)) return aUnit === 'ft' || bUnit === 'ft' ? 'ft' : 'in';
+  if (!imperial(aUnit) && !imperial(bUnit)) return aUnit === 'm' || bUnit === 'm' ? 'm' : 'mm';
+  return aUnit;
+}
+
 export function operate(a: CalcValue, operator: Operator, b: CalcValue): CalcValue {
   if (operator === '+' || operator === '-') {
     if (!compatibleForAdd(a, b)) throw new CalcError('DIM Error');
+    const amount = operator === '+' ? a.amount + b.amount : a.amount - b.amount;
+    const sourceUnit = preferredAddSourceUnit(a, b);
+    const unit = a.power > 0 && sourceUnit
+      ? measurement(0, sourceUnit, a.power).unit
+      : standardComputedUnit(a.unit !== 'auto' ? a.unit : b.unit);
     return {
-      amount: operator === '+' ? a.amount + b.amount : a.amount - b.amount,
+      amount,
       power: a.power,
-      angle: a.angle,
-      unit: a.unit !== 'auto' ? a.unit : b.unit,
+      angle: a.angle || b.angle || undefined,
+      unit,
       system: combinedSystem(a, b),
+      source: a.power > 0 && sourceUnit
+        ? {
+            amount: amount / measurement(1, sourceUnit, a.power).amount,
+            unit: sourceUnit,
+            power: a.power,
+          }
+        : undefined,
     };
   }
 
@@ -171,6 +202,7 @@ export function operate(a: CalcValue, operator: Operator, b: CalcValue): CalcVal
     return {
       ...a,
       amount,
+      unit: standardComputedUnit(a.unit),
       source: a.source
         ? {
             ...a.source,
@@ -183,22 +215,19 @@ export function operate(a: CalcValue, operator: Operator, b: CalcValue): CalcVal
     return {
       ...b,
       amount: a.amount * b.amount,
+      unit: standardComputedUnit(b.unit),
       source: b.source ? { ...b.source, amount: a.amount * b.source.amount } : undefined,
     };
   }
 
   const power = operator === '*' ? a.power + b.power : a.power - b.power;
   if (power < 0 || power > 3) throw new CalcError('DIM Error');
-  if (
-    power > 0 &&
-    a.source &&
-    b.source &&
-    a.source.unit === b.source.unit
-  ) {
-    const sourceAmount = operator === '*'
-      ? a.source.amount * b.source.amount
-      : a.source.amount / b.source.amount;
-    return measurement(sourceAmount, a.source.unit, power);
+  const aSourceUnit = a.source?.unit ?? baseUnitFromHint(a.unit);
+  const bSourceUnit = b.source?.unit ?? baseUnitFromHint(b.unit);
+  if (power > 0 && aSourceUnit && bSourceUnit && aSourceUnit === bSourceUnit) {
+    const amount = operator === '*' ? a.amount * b.amount : a.amount / b.amount;
+    const sourceAmount = amount / measurement(1, aSourceUnit, power).amount;
+    return measurement(sourceAmount, aSourceUnit, power);
   }
   return {
     amount: operator === '*' ? a.amount * b.amount : a.amount / b.amount,
@@ -210,44 +239,41 @@ export function operate(a: CalcValue, operator: Operator, b: CalcValue): CalcVal
 
 export function square(value: CalcValue): CalcValue {
   if (value.angle || value.power * 2 > 3) throw new CalcError('DIM Error');
-  return {
-    amount: value.amount ** 2,
-    power: value.power * 2,
-    unit: 'auto',
-    system: value.system,
-  };
+  return transformedDimensionalValue(value, value.amount ** 2, value.power * 2);
 }
 
 export function cube(value: CalcValue): CalcValue {
   if (value.angle || value.power * 3 > 3) throw new CalcError('DIM Error');
-  return {
-    amount: value.amount ** 3,
-    power: value.power * 3,
-    unit: 'auto',
-    system: value.system,
-  };
+  return transformedDimensionalValue(value, value.amount ** 3, value.power * 3);
+}
+
+function baseUnitFromHint(unit: UnitHint): 'ft' | 'in' | 'm' | 'mm' | undefined {
+  if (unit === 'ft-in' || unit === 'decimal-ft' || unit === 'sq-ft' || unit === 'cu-ft') return 'ft';
+  if (unit === 'in' || unit === 'decimal-in' || unit === 'sq-in' || unit === 'cu-in') return 'in';
+  if (unit === 'm' || unit === 'sq-m' || unit === 'cu-m') return 'm';
+  if (unit === 'mm' || unit === 'sq-mm' || unit === 'cu-mm') return 'mm';
+  return undefined;
+}
+
+function transformedDimensionalValue(value: CalcValue, amount: number, power: number): CalcValue {
+  const baseUnit = value.source?.unit ?? baseUnitFromHint(value.unit);
+  if (baseUnit && power > 0) {
+    const factors = { ft: 12, in: 1, m: 1000 / 25.4, mm: 1 / 25.4 };
+    return measurement(amount / factors[baseUnit] ** power, baseUnit, power);
+  }
+  return { amount, power, unit: 'auto', system: value.system };
 }
 
 export function squareRoot(value: CalcValue): CalcValue {
   if (value.angle || value.amount < 0 || value.power % 2 !== 0) {
     throw new CalcError(value.amount < 0 ? 'ENT Error' : 'DIM Error');
   }
-  return {
-    amount: Math.sqrt(value.amount),
-    power: value.power / 2,
-    unit: 'auto',
-    system: value.system,
-  };
+  return transformedDimensionalValue(value, Math.sqrt(value.amount), value.power / 2);
 }
 
 export function cubeRoot(value: CalcValue): CalcValue {
   if (value.angle || value.power % 3 !== 0) throw new CalcError('DIM Error');
-  return {
-    amount: Math.cbrt(value.amount),
-    power: value.power / 3,
-    unit: 'auto',
-    system: value.system,
-  };
+  return transformedDimensionalValue(value, Math.cbrt(value.amount), value.power / 3);
 }
 
 function precedence(operator: Operator, mathMode: Preferences['mathMode']): number {
@@ -334,14 +360,30 @@ function gcd(a: number, b: number): number {
   return x || 1;
 }
 
-function compactNumber(value: number, maxDecimals = 8, exponent = true): string {
+function compactNumber(
+  value: number,
+  maxDecimals = 8,
+  exponent = true,
+  maxSignificantDigits?: number,
+): string {
   if (!Number.isFinite(value)) throw new CalcError('0-fL0');
   const magnitude = Math.abs(value);
   if (magnitude > 19_999_999.99 || (magnitude > 0 && magnitude < 10 ** -maxDecimals)) {
     if (!exponent) throw new CalcError('0-fL0');
-    return value.toExponential(6).replace('+', '');
+    const [mantissa, power] = value.toExponential(6).split('e');
+    return `${mantissa.replace(/\.?0+$/, '')}e${power.replace('+', '')}`;
   }
-  const fixed = value.toFixed(maxDecimals);
+  const wholeDigits = magnitude >= 1 ? Math.floor(Math.log10(magnitude)) + 1 : 0;
+  const leadingFractionZeros = magnitude > 0 && magnitude < 1
+    ? Math.max(0, -Math.floor(Math.log10(magnitude)) - 1)
+    : 0;
+  const decimalPlaces = maxSignificantDigits === undefined
+    ? maxDecimals
+    : Math.max(0, Math.min(
+      maxDecimals,
+      maxSignificantDigits - wholeDigits + leadingFractionZeros,
+    ));
+  const fixed = value.toFixed(decimalPlaces);
   if (!exponent) {
     const [whole, fraction = ''] = fixed.split('.');
     const significantFraction = fraction.replace(/0+$/, '');
@@ -349,6 +391,35 @@ function compactNumber(value: number, maxDecimals = 8, exponent = true): string 
   }
   const rounded = Number(fixed);
   return Number.isInteger(rounded) ? `${rounded}.` : String(rounded);
+}
+
+const DISPLAY_MAX = 19_999_999.99;
+
+function decimalDisplay(
+  value: number,
+  unitText: string,
+  preferences: Preferences,
+  maxDecimals = 6,
+): FormattedValue {
+  const text = compactNumber(value, maxDecimals, preferences.exponent, 7).replace(/\.$/, '');
+  return { valueText: text, unitText, plainText: `${text} ${unitText.toLowerCase()}` };
+}
+
+function fixedDecimalWithinBudget(
+  value: number,
+  decimals: number,
+  exponent: boolean,
+  maxSignificantDigits: number,
+): string {
+  const magnitude = Math.abs(value);
+  const wholeDigits = magnitude >= 1 ? Math.floor(Math.log10(magnitude)) + 1 : 0;
+  const leadingFractionZeros = magnitude > 0 && magnitude < 1
+    ? Math.max(0, -Math.floor(Math.log10(magnitude)) - 1)
+    : 0;
+  const significantDigits = wholeDigits + Math.max(0, decimals - leadingFractionZeros);
+  return significantDigits <= maxSignificantDigits
+    ? value.toFixed(decimals)
+    : compactNumber(value, decimals, exponent, maxSignificantDigits);
 }
 
 function fractionParts(
@@ -413,35 +484,53 @@ export function formatValue(value: CalcValue, preferences: Preferences): Formatt
   if (value.angle) {
     const digits = preferences.degreeDecimals === 'fixed-2'
       ? value.amount.toFixed(2)
-      : compactNumber(value.amount, 7, preferences.exponent).replace(/\.$/, '');
+      : compactNumber(value.amount, 7, preferences.exponent, 7).replace(/\.$/, '');
     return { valueText: digits, unitText: 'DEG', plainText: `${digits}°` };
   }
 
   if (value.power === 0) {
-    const text = compactNumber(value.amount, 8, preferences.exponent);
+    const text = compactNumber(value.amount, 8, preferences.exponent, 8);
     return { valueText: text, unitText: '', plainText: text };
   }
 
   if (value.power === 1) {
     if (value.unit === 'decimal-ft') {
-      const text = compactNumber(value.amount / 12, 6, preferences.exponent);
+      const feet = value.amount / 12;
+      if (Math.abs(feet) > DISPLAY_MAX) return decimalDisplay(feet / 3, 'YARDS', preferences);
+      const text = compactNumber(feet, 6, preferences.exponent, 7);
       return { valueText: text, unitText: 'FEET', plainText: `${text} ft` };
     }
     if (value.unit === 'decimal-in') {
-      const text = compactNumber(value.amount, 6, preferences.exponent);
+      if (Math.abs(value.amount) > DISPLAY_MAX) return decimalDisplay(value.amount / 12, 'FEET', preferences);
+      const text = compactNumber(value.amount, 6, preferences.exponent, 7);
       return { valueText: text, unitText: 'INCH', plainText: `${text} in` };
     }
-    if (value.unit === 'in') return formatImperialLength(value.amount, preferences, false);
+    if (value.unit === 'in') {
+      if (Math.abs(value.amount) > DISPLAY_MAX) return decimalDisplay(value.amount / 12, 'FEET', preferences);
+      return formatImperialLength(value.amount, preferences, false);
+    }
     if (value.unit === 'm') {
       const meters = value.amount * 0.0254;
+      if (Math.abs(meters) > DISPLAY_MAX) return decimalDisplay(meters / 1000, 'KM', preferences);
       const text = preferences.meterDecimals === 'fixed-3'
-        ? meters.toFixed(3)
-        : compactNumber(meters, 8, preferences.exponent).replace(/\.$/, '');
+        ? fixedDecimalWithinBudget(meters, 3, preferences.exponent, 8)
+        : compactNumber(meters, 8, preferences.exponent, 7).replace(/\.$/, '');
       return { valueText: text, unitText: 'M', plainText: `${text} m` };
     }
     if (value.unit === 'mm') {
-      const text = compactNumber(value.amount * 25.4, 4, preferences.exponent);
+      const millimeters = value.amount * 25.4;
+      if (Math.abs(millimeters) > DISPLAY_MAX) {
+        const meters = millimeters / 1000;
+        const text = preferences.meterDecimals === 'fixed-3'
+          ? fixedDecimalWithinBudget(meters, 3, preferences.exponent, 8)
+          : compactNumber(meters, 8, preferences.exponent, 7).replace(/\.$/, '');
+        return { valueText: text, unitText: 'M', plainText: `${text} m` };
+      }
+      const text = compactNumber(millimeters, 4, preferences.exponent, 7);
       return { valueText: text, unitText: 'MM', plainText: `${text} mm` };
+    }
+    if (Math.abs(value.amount / 12) > DISPLAY_MAX) {
+      return decimalDisplay(value.amount / 36, 'YARDS', preferences);
     }
     return formatImperialLength(value.amount, preferences, true);
   }
@@ -473,7 +562,14 @@ export function formatValue(value: CalcValue, preferences: Preferences): Formatt
     converted = value.amount / 12 ** value.power;
     unitText = value.power === 2 ? 'SQ FEET' : 'CU FEET';
   }
-  const text = compactNumber(converted, 6, preferences.exponent);
+  if (Math.abs(converted) > DISPLAY_MAX && useMillimeters) {
+    converted /= 1000 ** value.power;
+    unitText = value.power === 2 ? 'SQ M' : 'CU M';
+  } else if (Math.abs(converted) > DISPLAY_MAX && useInches) {
+    converted /= 12 ** value.power;
+    unitText = value.power === 2 ? 'SQ FEET' : 'CU FEET';
+  }
+  const text = compactNumber(converted, 6, preferences.exponent, 10);
   return { valueText: text, unitText, plainText: `${text} ${unitText.toLowerCase()}` };
 }
 

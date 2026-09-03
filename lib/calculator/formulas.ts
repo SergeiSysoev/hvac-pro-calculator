@@ -37,7 +37,7 @@ export interface CircleValues {
   height?: number;
 }
 
-function lengthValue(inches: number, unit: CalcValue['unit'] = 'ft-in'): CalcValue {
+function lengthValue(inches: number, unit: CalcValue['unit'] = 'auto'): CalcValue {
   return { amount: inches, power: 1, unit, system: unit === 'm' || unit === 'mm' ? 'metric' : 'imperial' };
 }
 
@@ -50,37 +50,71 @@ function volumeValue(cubicInches: number, system: CalcValue['system'] = 'imperia
 }
 
 export function solveRightTriangle(values: TriangleValues): Required<TriangleValues> {
-  let { x, y, r, theta } = values;
+  const { x, y, r, theta } = values;
   const known = [x, y, r, theta].filter((value) => value !== undefined).length;
   if (known < 2) throw new CalcError('ENT Error');
 
-  const rad = theta === undefined ? undefined : theta * Math.PI / 180;
-  if (x !== undefined && y !== undefined) {
-    r ??= Math.hypot(x, y);
-    theta ??= Math.atan2(y, x) * 180 / Math.PI;
-  } else if (x !== undefined && r !== undefined) {
-    if (Math.abs(x) > Math.abs(r)) throw new CalcError('ENT Error');
-    y ??= Math.sqrt(r ** 2 - x ** 2);
-    theta ??= Math.acos(x / r) * 180 / Math.PI;
-  } else if (y !== undefined && r !== undefined) {
-    if (Math.abs(y) > Math.abs(r)) throw new CalcError('ENT Error');
-    x ??= Math.sqrt(r ** 2 - y ** 2);
-    theta ??= Math.asin(y / r) * 180 / Math.PI;
-  } else if (x !== undefined && rad !== undefined) {
-    y ??= x * Math.tan(rad);
-    r ??= x / Math.cos(rad);
-  } else if (y !== undefined && rad !== undefined) {
-    x ??= y / Math.tan(rad);
-    r ??= y / Math.sin(rad);
-  } else if (r !== undefined && rad !== undefined) {
-    x ??= r * Math.cos(rad);
-    y ??= r * Math.sin(rad);
-  }
-
-  if ([x, y, r, theta].some((value) => value === undefined || !Number.isFinite(value))) {
+  const sides = [x, y, r].filter((value): value is number => value !== undefined);
+  if (
+    sides.some((value) => !Number.isFinite(value) || value <= 0) ||
+    (theta !== undefined && (!Number.isFinite(theta) || theta <= 0 || theta >= 90))
+  ) {
     throw new CalcError('ENT Error');
   }
-  return { x: x!, y: y!, r: r!, theta: theta! };
+
+  const rad = theta === undefined ? undefined : theta * Math.PI / 180;
+  let solved: Required<TriangleValues>;
+  if (x !== undefined && y !== undefined) {
+    solved = {
+      x,
+      y,
+      r: Math.hypot(x, y),
+      theta: Math.atan2(y, x) * 180 / Math.PI,
+    };
+  } else if (x !== undefined && r !== undefined) {
+    if (x >= r) throw new CalcError('ENT Error');
+    solved = {
+      x,
+      y: Math.sqrt(r ** 2 - x ** 2),
+      r,
+      theta: Math.acos(x / r) * 180 / Math.PI,
+    };
+  } else if (y !== undefined && r !== undefined) {
+    if (y >= r) throw new CalcError('ENT Error');
+    solved = {
+      x: Math.sqrt(r ** 2 - y ** 2),
+      y,
+      r,
+      theta: Math.asin(y / r) * 180 / Math.PI,
+    };
+  } else if (x !== undefined && rad !== undefined) {
+    solved = { x, y: x * Math.tan(rad), r: x / Math.cos(rad), theta: theta! };
+  } else if (y !== undefined && rad !== undefined) {
+    solved = { x: y / Math.tan(rad), y, r: y / Math.sin(rad), theta: theta! };
+  } else if (r !== undefined && rad !== undefined) {
+    solved = { x: r * Math.cos(rad), y: r * Math.sin(rad), r, theta: theta! };
+  } else {
+    throw new CalcError('ENT Error');
+  }
+
+  if (
+    Object.values(solved).some((value) => !Number.isFinite(value) || value <= 0) ||
+    solved.theta >= 90
+  ) {
+    throw new CalcError('ENT Error');
+  }
+
+  const matches = (actual: number, expected: number) => (
+    Math.abs(actual - expected) <= 1e-9 * Math.max(1, Math.abs(actual), Math.abs(expected))
+  );
+  for (const key of ['x', 'y', 'r', 'theta'] as const) {
+    const supplied = values[key];
+    if (supplied !== undefined && !matches(supplied, solved[key])) {
+      throw new CalcError('ENT Error');
+    }
+  }
+
+  return solved;
 }
 
 export function pitchCycle(values: TriangleValues): NamedResult[] {
@@ -179,11 +213,7 @@ export function velocityPressureResults(input: number): NamedResult[] {
     { label: 'FPM', value: scalar(4005 * Math.sqrt(input)) },
     { label: 'VP', value: scalar((input / 4005) ** 2) },
     { label: 'MPS', value: scalar(1.3 * Math.sqrt(input)) },
-    {
-      label: 'kPA',
-      value: scalar((input / 1.3) ** 2),
-      note: 'Legacy workflow compatibility: the original label is retained.',
-    },
+    { label: 'kPA', value: scalar((input / 1.3) ** 2) },
     { label: 'ENTRY', value: scalar(input) },
   ];
 }
@@ -203,14 +233,13 @@ export function segmentRise(radius: number, chord: number): number {
   return radius - Math.sqrt(radius ** 2 - (chord / 2) ** 2);
 }
 
-export function circleResults(circle: CircleValues, onCenter = 16): NamedResult[] {
+export function circleResults(circle: CircleValues): NamedResult[] {
   const radius = circle.radius ?? (circle.diameter === undefined ? undefined : circle.diameter / 2);
   if (!radius || radius <= 0) throw new CalcError('ENT Error');
   return [
     { label: 'DIA', value: lengthValue(radius * 2) },
     { label: 'CIRC', value: lengthValue(2 * Math.PI * radius) },
     { label: 'AREA', value: areaValue(Math.PI * radius ** 2) },
-    { label: 'OC', value: lengthValue(onCenter, 'in') },
   ];
 }
 
@@ -320,8 +349,11 @@ export function jackRafterResults(
     return [{ label: 'JKOC', value: lengthValue(preferences.onCenter, 'in') }, ...regular];
   }
   const irregular = makeSide(oppositeRun, run, irregularSlope, 'IJ', regularCheek);
-  const oc = { label: irregularFirst ? 'IJOC' : 'JKOC', value: lengthValue(preferences.onCenter, 'in') };
-  return irregularFirst ? [oc, ...irregular, ...regular] : [oc, ...regular, ...irregular];
+  const regularOc = { label: 'JKOC', value: lengthValue(preferences.onCenter, 'in') };
+  const irregularOc = { label: 'IJOC', value: lengthValue(preferences.onCenter, 'in') };
+  return irregularFirst
+    ? [irregularOc, ...irregular, regularOc, ...regular]
+    : [regularOc, ...regular, irregularOc, ...irregular];
 }
 
 export function stairResults(
@@ -365,11 +397,14 @@ export function stairResults(
   const opening = (preferences.headroom + preferences.floorThickness) * roundedTread / roundedRiser;
   const stringer = treads * Math.hypot(roundedRiser, roundedTread);
   const incline = Math.atan2(roundedRiser, roundedTread) * 180 / Math.PI;
-  const warning = Math.abs(roundedRiser / preferences.desiredRiser - 1) > 0.1 ||
-    Math.abs(roundedTread / preferences.treadWidth - 1) > 0.1;
+  const desiredRatio = preferences.desiredRiser / preferences.treadWidth;
+  const actualRatio = roundedRiser / roundedTread;
+  const warningNote = Math.abs(actualRatio / desiredRatio - 1) > 0.1
+    ? 'Steep/atypical stair ratio'
+    : undefined;
 
-  return [
-    { label: 'R-HT', value: lengthValue(roundedRiser, 'in'), note: warning ? 'Steep/atypical stair ratio' : undefined },
+  const results: NamedResult[] = [
+    { label: 'R-HT', value: lengthValue(roundedRiser, 'in') },
     { label: 'RSRS', value: scalar(risers) },
     { label: 'R+/−', value: lengthValue(riserOver, 'in') },
     { label: 'T-WD', value: lengthValue(roundedTread, 'in') },
@@ -382,9 +417,10 @@ export function stairResults(
     { label: 'RISE', value: lengthValue(rise) },
     { label: 'R-HT STORED', value: lengthValue(preferences.desiredRiser, 'in') },
     { label: 'T-WD STORED', value: lengthValue(preferences.treadWidth, 'in') },
-    { label: 'HDRM STORED', value: lengthValue(preferences.headroom) },
+    { label: 'HDRM STORED', value: lengthValue(preferences.headroom, 'ft-in') },
     { label: 'FLOR STORED', value: lengthValue(preferences.floorThickness, 'in') },
   ];
+  return results.map((result) => ({ ...result, note: warningNote }));
 }
 
 export function convertDms(value: number, toDecimal: boolean): number {
@@ -397,10 +433,11 @@ export function convertDms(value: number, toDecimal: boolean): number {
     return Math.sign(value || 1) * (Math.abs(degreesPart) + minutes / 60 + seconds / 3600);
   }
   const absolute = Math.abs(value);
-  const degreesPart = Math.trunc(absolute);
-  const totalSeconds = Math.round((absolute - degreesPart) * 3600);
-  const minutes = Math.trunc(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
+  const roundedSeconds = Math.round(absolute * 3600);
+  const degreesPart = Math.trunc(roundedSeconds / 3600);
+  const remainingSeconds = roundedSeconds % 3600;
+  const minutes = Math.trunc(remainingSeconds / 60);
+  const seconds = remainingSeconds % 60;
   return Math.sign(value || 1) * (degreesPart + minutes / 100 + seconds / 10_000);
 }
 
