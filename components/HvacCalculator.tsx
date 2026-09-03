@@ -1,84 +1,33 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import {
-  CalculatorState,
+  PointerEvent as ReactPointerEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from 'react';
+import CalculatorDisplay from '@/components/calculator/CalculatorDisplay';
+import CalculatorKeypad, {
+  KeyAction,
+  KeyFace,
+} from '@/components/calculator/CalculatorKeypad';
+import DuctCalculator from '@/components/calculator/DuctCalculator';
+import PreferencesDialog from '@/components/calculator/PreferencesDialog';
+import { projectedPageIndex, rubberBandDistance } from '@/lib/carousel';
+import {
   KeyId,
-  activeGuide,
   calculatorReducer,
   initialCalculatorState,
   persistedState,
 } from '@/lib/calculator/engine';
 
-type KeyFace = {
-  id: KeyId;
-  primary: string;
-  secondary?: string;
-  detail?: string;
-  tone?: 'dark' | 'mid' | 'light' | 'yellow';
-};
-
-const KEY_ROWS: KeyFace[][] = [
-  [
-    { id: 'run', primary: 'x', detail: 'Run', secondary: 'Fan Law 1', tone: 'mid' },
-    { id: 'rise', primary: 'y', detail: 'Rise', secondary: 'Fan Law 2', tone: 'mid' },
-    { id: 'diag', primary: 'r', detail: 'Diag', secondary: 'Fan Law 3', tone: 'mid' },
-    { id: 'pitch', primary: 'θ', detail: 'Pitch', secondary: 'Seg Radius', tone: 'mid' },
-    { id: 'hip', primary: 'Hip/V', secondary: 'Ir/Pitch', tone: 'dark' },
-  ],
-  [
-    { id: 'square', primary: 'x²', secondary: 'x³' },
-    { id: 'sqrt', primary: '√x', secondary: '³√x' },
-    { id: 'circ', primary: 'Circ', secondary: 'Arc' },
-    { id: 'stair', primary: 'Stair', secondary: 'Riser' },
-    { id: 'jack', primary: 'Jack', secondary: 'Ir/Jack' },
-  ],
-  [
-    { id: 'sin', primary: 'Sine', secondary: 'ArcSine' },
-    { id: 'cos', primary: 'Cos', secondary: 'ArcCos' },
-    { id: 'tan', primary: 'Tan', secondary: 'ArcTan' },
-    { id: 'left', primary: '(', secondary: 'Offset' },
-    { id: 'right', primary: ')', secondary: 'Column/Cone' },
-  ],
-  [
-    { id: 'meter', primary: 'm', secondary: 'mm', tone: 'dark' },
-    { id: 'feet', primary: 'Feet', tone: 'mid' },
-    { id: 'inch', primary: 'Inch', tone: 'mid' },
-    { id: 'fraction', primary: '/', secondary: 'x10ʸ', tone: 'mid' },
-    { id: 'backspace', primary: '←', tone: 'dark' },
-  ],
-  [
-    { id: 'conv', primary: 'Conv', tone: 'yellow' },
-    { id: '7', primary: '7', secondary: 'A new' },
-    { id: '8', primary: '8', secondary: 'B new' },
-    { id: '9', primary: '9', secondary: 'LawCos' },
-    { id: 'divide', primary: '÷', secondary: '1/x', tone: 'dark' },
-  ],
-  [
-    { id: 'recall', primary: 'Rcl', secondary: 'Swap M+', tone: 'dark' },
-    { id: '4', primary: '4', secondary: 'A' },
-    { id: '5', primary: '5', secondary: 'B' },
-    { id: '6', primary: '6', secondary: 'C' },
-    { id: 'multiply', primary: '×', secondary: 'Clear All', tone: 'dark' },
-  ],
-  [
-    { id: 'mplus', primary: 'M+', secondary: 'M−', tone: 'dark' },
-    { id: '1', primary: '1', secondary: 'M1' },
-    { id: '2', primary: '2', secondary: 'M2' },
-    { id: '3', primary: '3', secondary: 'M3' },
-    { id: 'subtract', primary: '−', secondary: '+/−', tone: 'dark' },
-  ],
-  [
-    { id: 'pi', primary: 'π', secondary: 'ArcK', tone: 'dark' },
-    { id: '0', primary: '0', secondary: 'VP ↔ FPM' },
-    { id: 'decimal', primary: '•', secondary: 'dms ↔ deg' },
-    { id: 'equals', primary: '=', secondary: 'Prefs', tone: 'dark' },
-    { id: 'add', primary: '+', secondary: '%', tone: 'dark' },
-  ],
-];
-
-const STORAGE_KEY = 'hvac-4090-pro-state-v1';
+const STORAGE_KEY = 'hvac-pro-calculator-state-v2';
+const LEGACY_STORAGE_KEY = 'hvac-4090-pro-state-v1';
 const PUBLIC_BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? '';
+const PAGE_NAMES = ['Scientific', 'Trade', 'Duct'] as const;
 
 const KEYBOARD_MAP: Record<string, KeyId> = {
   '0': '0', '1': '1', '2': '2', '3': '3', '4': '4',
@@ -88,20 +37,220 @@ const KEYBOARD_MAP: Record<string, KeyId> = {
   Backspace: 'backspace', Escape: 'on', '(': 'left', ')': 'right',
 };
 
-function hasMemory(state: CalculatorState): boolean {
-  return Boolean(state.memory.cumulative || state.memory.m1 || state.memory.m2 || state.memory.m3);
+function scientificKeys(accuracy: number): KeyFace[] {
+  return [
+    { id: 's-off', label: 'Off', key: 'off', tone: 'dark' },
+    { id: 's-on', label: 'On/C', key: 'on', tone: 'danger' },
+    { id: 's-left', label: '(', key: 'left', secondary: 'Offset', tone: 'dark' },
+    { id: 's-right', label: ')', key: 'right', secondary: 'Col/Cone', tone: 'dark' },
+    { id: 's-back', label: '←', key: 'backspace', tone: 'dark' },
+    { id: 's-pi', label: 'π', key: 'pi', secondary: 'ArcK', tone: 'dark' },
+
+    { id: 's-x', label: 'x', key: 'run', secondary: 'Fan 1', detail: 'Run' },
+    { id: 's-y', label: 'y', key: 'rise', secondary: 'Fan 2', detail: 'Rise' },
+    { id: 's-r', label: 'r', key: 'diag', secondary: 'Fan 3', detail: 'Diag' },
+    { id: 's-theta', label: 'θ', key: 'pitch', secondary: 'Seg Rad', detail: 'Pitch' },
+    { id: 's-circ', label: 'Circ', key: 'circ', secondary: 'Arc' },
+    { id: 's-square', label: 'x²', key: 'square', secondary: 'x³' },
+
+    { id: 's-sin', label: 'Sin', key: 'sin', secondary: 'ArcSin' },
+    { id: 's-cos', label: 'Cos', key: 'cos', secondary: 'ArcCos' },
+    { id: 's-tan', label: 'Tan', key: 'tan', secondary: 'ArcTan' },
+    { id: 's-root', label: '√', key: 'sqrt', secondary: '³√' },
+    { id: 's-feet', label: 'Feet', key: 'feet', tone: 'dark' },
+    { id: 's-inch', label: 'Inch', key: 'inch', tone: 'dark' },
+
+    { id: 's-conv', label: 'Conv', key: 'conv', tone: 'accent' },
+    { id: 's-recall', label: 'Rcl', key: 'recall', secondary: 'Swap M+', tone: 'dark' },
+    { id: 's-7', label: '7', key: '7', secondary: 'A new', tone: 'number' },
+    { id: 's-8', label: '8', key: '8', secondary: 'B new', tone: 'number' },
+    { id: 's-9', label: '9', key: '9', secondary: 'LawCos', tone: 'number' },
+    { id: 's-divide', label: '÷', key: 'divide', secondary: '1/x', tone: 'dark' },
+
+    { id: 's-memory', label: 'M+', key: 'mplus', secondary: 'M−', tone: 'dark' },
+    { id: 's-fraction', label: '/', key: 'fraction', secondary: 'x10ʸ', tone: 'dark' },
+    { id: 's-4', label: '4', key: '4', secondary: 'A', tone: 'number' },
+    { id: 's-5', label: '5', key: '5', secondary: 'B', tone: 'number' },
+    { id: 's-6', label: '6', key: '6', secondary: 'C', tone: 'number' },
+    { id: 's-multiply', label: '×', key: 'multiply', secondary: 'Clear All', tone: 'dark' },
+
+    { id: 's-clear', label: 'C', key: 'on', tone: 'dark' },
+    { id: 's-sign', label: '+/−', key: 'subtract', converted: true, tone: 'dark' },
+    { id: 's-1', label: '1', key: '1', secondary: 'M1', tone: 'number' },
+    { id: 's-2', label: '2', key: '2', secondary: 'M2', tone: 'number' },
+    { id: 's-3', label: '3', key: '3', secondary: 'M3', tone: 'number' },
+    { id: 's-subtract', label: '−', key: 'subtract', tone: 'dark' },
+
+    { id: 's-meter', label: 'm', key: 'meter', secondary: 'mm', tone: 'dark' },
+    { id: 's-accuracy', label: `1/${accuracy}`, action: 'accuracy', tone: 'dark' },
+    { id: 's-0', label: '0', key: '0', secondary: 'VP/FPM', tone: 'number' },
+    { id: 's-decimal', label: '•', key: 'decimal', secondary: 'dms/deg', tone: 'number' },
+    { id: 's-equals', label: '=', key: 'equals', secondary: 'Prefs', tone: 'number' },
+    { id: 's-add', label: '+', key: 'add', secondary: '%', tone: 'dark' },
+  ];
 }
+
+function tradeKeys(accuracy: number): KeyFace[] {
+  return [
+    { id: 't-hip', label: 'Hip/V', key: 'hip' },
+    { id: 't-pitch', label: 'Pitch', key: 'pitch' },
+    { id: 't-jack', label: 'Jack', key: 'jack' },
+    { id: 't-stair', label: 'Stair', key: 'stair' },
+    { id: 't-offset', label: 'Offset', key: 'left', converted: true, tone: 'accent' },
+    { id: 't-column', label: 'Column', key: 'right', converted: true, tone: 'accent' },
+
+    { id: 't-ir-pitch', label: 'Ir/Pitch', key: 'hip', converted: true },
+    { id: 't-segment', label: 'Seg Rad', key: 'pitch', converted: true },
+    { id: 't-ir-jack', label: 'Ir/Jack', key: 'jack', converted: true },
+    { id: 't-riser', label: 'Riser', key: 'stair', converted: true },
+    { id: 't-circle', label: 'Circ', key: 'circ' },
+    { id: 't-arc', label: 'Arc', key: 'circ', converted: true },
+
+    { id: 't-x', label: 'x', key: 'run', detail: 'Run' },
+    { id: 't-y', label: 'y', key: 'rise', detail: 'Rise' },
+    { id: 't-r', label: 'r', key: 'diag', detail: 'Diag' },
+    { id: 't-theta', label: 'θ', key: 'pitch', detail: 'Pitch' },
+    { id: 't-on', label: 'On/C', key: 'on', tone: 'danger' },
+    { id: 't-inch', label: 'Inch', key: 'inch', tone: 'dark' },
+
+    { id: 't-conv', label: 'Conv', key: 'conv', tone: 'accent' },
+    { id: 't-recall', label: 'Rcl', key: 'recall', tone: 'dark' },
+    { id: 't-7', label: '7', key: '7', tone: 'number' },
+    { id: 't-8', label: '8', key: '8', tone: 'number' },
+    { id: 't-9', label: '9', key: '9', tone: 'number' },
+    { id: 't-divide', label: '÷', key: 'divide', tone: 'dark' },
+
+    { id: 't-memory', label: 'M+', key: 'mplus', tone: 'dark' },
+    { id: 't-fraction', label: '/', key: 'fraction', tone: 'dark' },
+    { id: 't-4', label: '4', key: '4', tone: 'number' },
+    { id: 't-5', label: '5', key: '5', tone: 'number' },
+    { id: 't-6', label: '6', key: '6', tone: 'number' },
+    { id: 't-multiply', label: '×', key: 'multiply', tone: 'dark' },
+
+    { id: 't-clear', label: 'C', key: 'on', tone: 'dark' },
+    { id: 't-sign', label: '+/−', key: 'subtract', converted: true, tone: 'dark' },
+    { id: 't-1', label: '1', key: '1', tone: 'number' },
+    { id: 't-2', label: '2', key: '2', tone: 'number' },
+    { id: 't-3', label: '3', key: '3', tone: 'number' },
+    { id: 't-subtract', label: '−', key: 'subtract', tone: 'dark' },
+
+    { id: 't-back', label: '←', key: 'backspace', tone: 'dark' },
+    { id: 't-feet', label: 'Feet', key: 'feet', tone: 'dark' },
+    { id: 't-0', label: '0', key: '0', tone: 'number' },
+    { id: 't-decimal', label: '•', key: 'decimal', tone: 'number' },
+    { id: 't-equals', label: '=', key: 'equals', tone: 'number' },
+    { id: 't-add', label: '+', key: 'add', tone: 'dark' },
+
+    { id: 't-meter', label: 'm', key: 'meter', secondary: 'mm', tone: 'dark' },
+    { id: 't-fan-1', label: 'Fan 1', key: 'run', converted: true },
+    { id: 't-fan-2', label: 'Fan 2', key: 'rise', converted: true },
+    { id: 't-fan-3', label: 'Fan 3', key: 'diag', converted: true },
+    { id: 't-velocity', label: 'VP/FPM', key: '0', converted: true },
+    { id: 't-accuracy', label: `1/${accuracy}`, action: 'accuracy', tone: 'dark' },
+  ];
+}
+
+type DragState = {
+  pointerId: number;
+  startX: number;
+  startY: number;
+  baseOffset: number;
+  lastX: number;
+  lastTime: number;
+  velocity: number;
+  locked: boolean;
+};
 
 export default function HvacCalculator() {
   const [state, dispatch] = useReducer(calculatorReducer, undefined, initialCalculatorState);
-  const [guideOpen, setGuideOpen] = useState(true);
+  const [activePage, setActivePage] = useState(0);
+  const [trackOffset, setTrackOffsetState] = useState(0);
+  const [dragging, setDragging] = useState(false);
   const hydrated = useRef(false);
+  const viewport = useRef<HTMLDivElement>(null);
+  const viewportWidth = useRef(0);
+  const activePageRef = useRef(0);
+  const trackOffsetRef = useRef(0);
+  const dragState = useRef<DragState | null>(null);
+  const animationFrame = useRef<number | null>(null);
+  const suppressClick = useRef(false);
   const preferencesDialog = useRef<HTMLElement>(null);
   const preferencesOpener = useRef<HTMLElement | null>(null);
 
+  const setTrackOffset = useCallback((value: number) => {
+    trackOffsetRef.current = value;
+    setTrackOffsetState(value);
+  }, []);
+
+  const cancelAnimation = useCallback(() => {
+    if (animationFrame.current !== null) cancelAnimationFrame(animationFrame.current);
+    animationFrame.current = null;
+  }, []);
+
+  const animateToPage = useCallback((page: number, initialVelocity = 0) => {
+    const width = viewportWidth.current;
+    const targetPage = Math.max(0, Math.min(PAGE_NAMES.length - 1, page));
+    const target = -targetPage * width;
+    cancelAnimation();
+    activePageRef.current = targetPage;
+    setActivePage(targetPage);
+
+    if (!width || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      setTrackOffset(target);
+      return;
+    }
+
+    let velocity = initialVelocity;
+    let lastTime = performance.now();
+    const damping = Math.abs(initialVelocity) > 80 ? 31 : 38;
+    const stiffness = 360;
+
+    const tick = (time: number) => {
+      const deltaTime = Math.min((time - lastTime) / 1000, 0.032);
+      lastTime = time;
+      const position = trackOffsetRef.current;
+      const acceleration = -stiffness * (position - target) - damping * velocity;
+      velocity += acceleration * deltaTime;
+      const next = position + velocity * deltaTime;
+      setTrackOffset(next);
+
+      if (Math.abs(next - target) < 0.35 && Math.abs(velocity) < 7) {
+        setTrackOffset(target);
+        animationFrame.current = null;
+        return;
+      }
+      animationFrame.current = requestAnimationFrame(tick);
+    };
+
+    animationFrame.current = requestAnimationFrame(tick);
+  }, [cancelAnimation, setTrackOffset]);
+
+  useEffect(() => {
+    activePageRef.current = activePage;
+  }, [activePage]);
+
+  useEffect(() => {
+    const element = viewport.current;
+    if (!element) return;
+    const resize = () => {
+      const width = element.getBoundingClientRect().width;
+      if (!width) return;
+      viewportWidth.current = width;
+      cancelAnimation();
+      setTrackOffset(-activePageRef.current * width);
+    };
+    resize();
+    const observer = new ResizeObserver(resize);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [cancelAnimation, setTrackOffset]);
+
+  useEffect(() => () => cancelAnimation(), [cancelAnimation]);
+
   useEffect(() => {
     try {
-      const saved = window.localStorage.getItem(STORAGE_KEY);
+      const saved = window.localStorage.getItem(STORAGE_KEY)
+        ?? window.localStorage.getItem(LEGACY_STORAGE_KEY);
       if (saved) dispatch({ type: 'hydrate', payload: JSON.parse(saved) });
     } catch {
       // A disabled or corrupt localStorage should never block calculator use.
@@ -127,17 +276,35 @@ export default function HvacCalculator() {
     }
   }, []);
 
-  const press = useCallback((key: KeyId) => {
+  const press = useCallback((key: KeyId, forceConverted = false) => {
     if (
       key === 'equals' &&
-      (state.modifier === 'convert' || state.modifier === 'recall') &&
+      (forceConverted || state.modifier === 'convert' || state.modifier === 'recall') &&
       document.activeElement instanceof HTMLElement
     ) {
       preferencesOpener.current = document.activeElement;
     }
+    if (forceConverted && state.modifier !== 'convert') dispatch({ type: 'press', key: 'conv' });
     dispatch({ type: 'press', key });
     if ('vibrate' in navigator) navigator.vibrate?.(7);
   }, [state.modifier]);
+
+  const openPreferences = useCallback(() => {
+    if (document.activeElement instanceof HTMLElement) preferencesOpener.current = document.activeElement;
+    dispatch({ type: 'toggle-preferences', open: true });
+  }, []);
+
+  const handleAction = useCallback((action: KeyAction) => {
+    if (action === 'preferences') {
+      openPreferences();
+      return;
+    }
+    const options = [16, 32, 64, 2, 4, 8] as const;
+    const currentIndex = options.indexOf(state.preferences.fractionDenominator);
+    const next = options[(currentIndex + 1) % options.length];
+    dispatch({ type: 'set-preference', key: 'fractionDenominator', value: next });
+    if ('vibrate' in navigator) navigator.vibrate?.(7);
+  }, [openPreferences, state.preferences.fractionDenominator]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -146,7 +313,7 @@ export default function HvacCalculator() {
         dispatch({ type: 'toggle-preferences', open: false });
         return;
       }
-      if (state.preferencesOpen) return;
+      if (state.preferencesOpen || activePage === 2) return;
       if (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement) return;
       const key = KEYBOARD_MAP[event.key];
       if (!key) return;
@@ -155,13 +322,12 @@ export default function HvacCalculator() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [press, state.preferencesOpen]);
+  }, [activePage, press, state.preferencesOpen]);
 
   useEffect(() => {
     if (!state.preferencesOpen) return;
     const dialog = preferencesDialog.current;
     const opener = preferencesOpener.current;
-
     const trapFocus = (event: KeyboardEvent) => {
       if (event.key !== 'Tab' || !dialog) return;
       const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(
@@ -178,7 +344,6 @@ export default function HvacCalculator() {
         first.focus();
       }
     };
-
     document.addEventListener('keydown', trapFocus);
     return () => {
       document.removeEventListener('keydown', trapFocus);
@@ -187,257 +352,163 @@ export default function HvacCalculator() {
     };
   }, [state.preferencesOpen]);
 
-  const guide = useMemo(() => activeGuide(state), [state]);
-  const modifierText = state.modifier === 'convert' ? 'CONV' : state.modifier === 'recall' ? 'RCL' : '';
+  const scientific = useMemo(
+    () => scientificKeys(state.preferences.fractionDenominator),
+    [state.preferences.fractionDenominator],
+  );
+  const trade = useMemo(
+    () => tradeKeys(state.preferences.fractionDenominator),
+    [state.preferences.fractionDenominator],
+  );
+
+  const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!event.isPrimary || event.button !== 0) return;
+    dragState.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      baseOffset: trackOffsetRef.current,
+      lastX: event.clientX,
+      lastTime: performance.now(),
+      velocity: 0,
+      locked: false,
+    };
+  };
+
+  const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragState.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const deltaX = event.clientX - drag.startX;
+    const deltaY = event.clientY - drag.startY;
+
+    if (!drag.locked) {
+      if (Math.max(Math.abs(deltaX), Math.abs(deltaY)) < 10) return;
+      if (Math.abs(deltaY) > Math.abs(deltaX)) {
+        dragState.current = null;
+        return;
+      }
+      const animationWasRunning = animationFrame.current !== null;
+      cancelAnimation();
+      if (animationWasRunning) drag.baseOffset = trackOffsetRef.current - deltaX;
+      drag.locked = true;
+      setDragging(true);
+      suppressClick.current = true;
+      event.currentTarget.setPointerCapture(event.pointerId);
+    }
+
+    event.preventDefault();
+    const now = performance.now();
+    const elapsed = Math.max(now - drag.lastTime, 1);
+    const sampleVelocity = (event.clientX - drag.lastX) / elapsed * 1000;
+    drag.velocity = drag.velocity * 0.62 + sampleVelocity * 0.38;
+    drag.lastX = event.clientX;
+    drag.lastTime = now;
+
+    const width = viewportWidth.current;
+    const minimum = -(PAGE_NAMES.length - 1) * width;
+    let next = drag.baseOffset + deltaX;
+    if (next > 0) next = rubberBandDistance(next, width);
+    if (next < minimum) next = minimum + rubberBandDistance(next - minimum, width);
+    setTrackOffset(next);
+  };
+
+  const finishPointer = (event: ReactPointerEvent<HTMLDivElement>, cancelled = false) => {
+    const drag = dragState.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    dragState.current = null;
+    setDragging(false);
+    if (!drag.locked) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    const velocity = cancelled ? 0 : drag.velocity;
+    const target = cancelled
+      ? activePageRef.current
+      : projectedPageIndex(
+        trackOffsetRef.current,
+        velocity,
+        viewportWidth.current,
+        PAGE_NAMES.length,
+        activePageRef.current,
+      );
+    animateToPage(target, velocity);
+    window.setTimeout(() => { suppressClick.current = false; }, 0);
+  };
 
   return (
-    <main className="site-shell">
-      <header className="site-heading">
-        <div>
-          <p className="eyebrow">Independent 4090-compatible calculator</p>
-          <h1>HVAC 4090 Pro</h1>
-        </div>
-        <div className="header-actions">
-          <p className="heading-note">Sheet metal math, wherever the job takes you.</p>
-          <button type="button" className="header-button" onClick={() => setGuideOpen((open) => !open)}>
-            {guideOpen ? 'Hide guide' : 'Show guide'}
-          </button>
-        </div>
-      </header>
-
-      <section className={`calculator-stage ${guideOpen ? '' : 'guide-hidden'}`} aria-label="4090-compatible HVAC calculator">
-        <div className="calculator-wrap">
-          <div className={`calculator ${state.modifier === 'convert' ? 'convert-active' : ''}`}>
-            <div className="shell-detail shell-detail-left" />
-            <div className="shell-detail shell-detail-right" />
-            <div className="calculator-face">
-              <div className="brand-strip">
-                <strong>HVAC 4090 PRO</strong>
-                <span>FIELD CALCULATOR • WEB EDITION</span>
-              </div>
-
-              <div
-                className={`lcd ${state.display.label === 'ERROR' ? 'lcd-error' : ''}`}
-                role="status"
-                aria-live="polite"
-                aria-label={`${state.display.label} ${state.display.plainText}`.trim()}
-              >
-                <div className="lcd-annunciators" aria-hidden="true">
-                  <span>{state.parenthesisDepth ? `(${state.parenthesisDepth}` : ''}</span>
-                  <span>{hasMemory(state) ? 'M' : ''}</span>
-                  <span>{modifierText}</span>
-                </div>
-                <span className="lcd-mode">{state.powered ? state.display.label : ''}</span>
-                <span className="lcd-value">{state.powered ? state.display.valueText : ''}</span>
-                <span className="lcd-units">{state.powered ? state.display.unitText : ''}</span>
-              </div>
-
-              <div className="power-row">
-                <span className="reset-label">RESET</span>
-                <button type="button" className="power-key power-off" onClick={() => press('off')}>Off</button>
-                <button type="button" className="power-key power-on" onClick={() => press('on')}>On/C</button>
-              </div>
-
-              <div className="keypad">
-                {KEY_ROWS.flat().map((key) => {
-                  const secondaryActive = state.modifier === 'convert' && key.secondary;
-                  return (
-                    <div className="key-cell" key={key.id}>
-                      <span className={`secondary-label ${secondaryActive ? 'secondary-active' : ''}`} aria-hidden="true">
-                        {key.secondary ?? '\u00a0'}
-                      </span>
-                      <button
-                        type="button"
-                        className={`calc-key key-${key.tone ?? 'light'} ${key.id === 'conv' && state.modifier === 'convert' ? 'key-latched' : ''}`}
-                        aria-label={key.secondary ? `${key.primary}; converted function ${key.secondary}` : key.primary}
-                        aria-pressed={key.id === 'conv' ? state.modifier === 'convert' : undefined}
-                        onClick={() => press(key.id)}
-                        data-key={key.id}
-                      >
-                        <span>{key.primary}</span>
-                        {key.detail ? <small>{key.detail}</small> : null}
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-
-              <div className="maker-mark">FIELD TOOLS • MODEL 4090</div>
-            </div>
+    <main className="app-frame">
+      <div className="app-surface" aria-hidden={state.preferencesOpen} inert={state.preferencesOpen}>
+        <header className="app-header">
+        <div className="brand-lockup">
+          <span className="brand-badge" aria-hidden="true">HV</span>
+          <div>
+            <strong>HVAC PRO CALC</strong>
+            <span>{PAGE_NAMES[activePage]} calculator</span>
           </div>
-          {state.display.note ? <p className="display-note">{state.display.note}</p> : null}
         </div>
+        <button type="button" className="settings-button" aria-label="Open calculator preferences" onClick={openPreferences}>
+          <span aria-hidden="true">⚙</span>
+        </button>
+        </header>
 
-        {guideOpen ? (
-          <aside className="guide-panel" aria-label="Calculator guide">
-            <div className="guide-card guide-primary">
-              <div className="guide-heading">
-                <div>
-                  <p className="panel-kicker">Live key guide</p>
-                  <h2>{guide.title}</h2>
-                </div>
-                <button
-                  type="button"
-                  className="icon-button"
-                  aria-label="Open preferences"
-                  onClick={(event) => {
-                    preferencesOpener.current = event.currentTarget;
-                    dispatch({ type: 'toggle-preferences', open: true });
-                  }}
-                >
-                  ⚙
-                </button>
-              </div>
-              <ol>
-                {guide.steps.map((step) => <li key={step}>{step}</li>)}
-              </ol>
-              <div className="mode-strip">
-                <span className={state.modifier === 'convert' ? 'active' : ''}>CONV</span>
-                <span className={state.modifier === 'recall' ? 'active' : ''}>RCL</span>
-                <span className={state.permanentPitchSlope ? 'active' : ''}>PITCH</span>
-                <span className={hasMemory(state) ? 'active' : ''}>MEM</span>
-              </div>
+        <div
+          ref={viewport}
+          className="carousel-viewport"
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={(event) => finishPointer(event)}
+          onPointerCancel={(event) => finishPointer(event, true)}
+          onClickCapture={(event) => {
+            if (!suppressClick.current) return;
+            event.preventDefault();
+            event.stopPropagation();
+            suppressClick.current = false;
+          }}
+        >
+        <div
+          className={`carousel-track ${dragging ? 'is-dragging' : ''}`}
+          style={{ transform: `translate3d(${trackOffset}px, 0, 0)` }}
+        >
+          <section className="calculator-page" aria-label="Scientific calculator" aria-hidden={activePage !== 0} inert={activePage !== 0}>
+            <div className="page-scroll keypad-page">
+              <CalculatorDisplay active={activePage === 0} state={state} />
+              <CalculatorKeypad keys={scientific} modifier={state.modifier} onAction={handleAction} onPress={press} />
             </div>
+          </section>
 
-            <div className="guide-card function-card">
-              <p className="panel-kicker">Functions included</p>
-              <div className="function-grid">
-                <span>Fan Laws 1–3</span><span>VP / FPM</span>
-                <span>Offsets</span><span>Triangles</span>
-                <span>Circle / Arc</span><span>Hip / Jacks</span>
-                <span>Stair layout</span><span>Feet / Metric</span>
-              </div>
+          <section className="calculator-page" aria-label="Trade calculator" aria-hidden={activePage !== 1} inert={activePage !== 1}>
+            <div className="page-scroll keypad-page">
+              <CalculatorDisplay active={activePage === 1} state={state} />
+              <CalculatorKeypad keys={trade} modifier={state.modifier} onAction={handleAction} onPress={press} />
             </div>
+          </section>
 
-            <div className="guide-card history-card">
-              <div className="guide-heading compact">
-                <div>
-                  <p className="panel-kicker">Recent results</p>
-                  <h3>Field tape</h3>
-                </div>
-                <span className="history-count">{state.history.length}</span>
-              </div>
-              {state.history.length ? (
-                <ul>
-                  {state.history.slice(0, 5).map((item) => (
-                    <li key={item.id}><span>{item.label}</span><strong>{item.result}</strong></li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="empty-history">Your calculated values will stay here while you work.</p>
-              )}
-            </div>
-
-            <p className="keyboard-hint">Keyboard: numbers, operators, Enter, Backspace and parentheses.</p>
-          </aside>
-        ) : null}
-      </section>
-
-      <footer>
-        Independent 4090-compatible tool. Not affiliated with Calculated Industries.
-        Values are for field assistance; verify critical work against project requirements.
-      </footer>
-
-      {state.preferencesOpen ? (
-        <div className="dialog-backdrop" role="presentation" onMouseDown={() => dispatch({ type: 'toggle-preferences', open: false })}>
-          <section ref={preferencesDialog} className="preferences-dialog" role="dialog" aria-modal="true" aria-labelledby="preferences-title" onMouseDown={(event) => event.stopPropagation()}>
-            <div className="preferences-header">
-              <div>
-                <p className="panel-kicker">4090 setup</p>
-                <h2 id="preferences-title">Preferences</h2>
-              </div>
-              <button type="button" className="icon-button" aria-label="Close preferences" autoFocus onClick={() => dispatch({ type: 'toggle-preferences', open: false })}>×</button>
-            </div>
-
-            <div className="preferences-grid">
-              <label>
-                Fraction resolution
-                <select value={state.preferences.fractionDenominator} onChange={(event) => dispatch({ type: 'set-preference', key: 'fractionDenominator', value: Number(event.target.value) as 2 | 4 | 8 | 16 | 32 | 64 })}>
-                  {[16, 32, 64, 2, 4, 8].map((value) => <option key={value} value={value}>1/{value}</option>)}
-                </select>
-              </label>
-              <label>
-                Fraction mode
-                <select value={state.preferences.constantFraction ? 'constant' : 'standard'} onChange={(event) => dispatch({ type: 'set-preference', key: 'constantFraction', value: event.target.value === 'constant' })}>
-                  <option value="standard">Reduced</option>
-                  <option value="constant">Constant denominator</option>
-                </select>
-              </label>
-              <label>
-                Area answers
-                <select value={state.preferences.areaFormat} onChange={(event) => dispatch({ type: 'set-preference', key: 'areaFormat', value: event.target.value as 'standard' | 'sq-ft' | 'sq-m' })}>
-                  <option value="standard">Standard</option><option value="sq-ft">Square feet</option><option value="sq-m">Square meters</option>
-                </select>
-              </label>
-              <label>
-                Volume answers
-                <select value={state.preferences.volumeFormat} onChange={(event) => dispatch({ type: 'set-preference', key: 'volumeFormat', value: event.target.value as 'standard' | 'cu-ft' | 'cu-m' })}>
-                  <option value="standard">Standard</option><option value="cu-ft">Cubic feet</option><option value="cu-m">Cubic meters</option>
-                </select>
-              </label>
-              <label>
-                Math method
-                <select value={state.preferences.mathMode} onChange={(event) => dispatch({ type: 'set-preference', key: 'mathMode', value: event.target.value as 'order' | 'chain' })}>
-                  <option value="order">Order of operations</option><option value="chain">Chain / as entered</option>
-                </select>
-              </label>
-              <label>
-                Jack order
-                <select value={state.preferences.jackOrder} onChange={(event) => dispatch({ type: 'set-preference', key: 'jackOrder', value: event.target.value as 'descending' | 'ascending' })}>
-                  <option value="descending">Descending</option><option value="ascending">Ascending</option>
-                </select>
-              </label>
-              <label>
-                Irregular jack spacing
-                <select value={state.preferences.irregularJackMode} onChange={(event) => dispatch({ type: 'set-preference', key: 'irregularJackMode', value: event.target.value as 'oc-oc' | 'mate' })}>
-                  <option value="oc-oc">On-center both sides</option><option value="mate">Mate at hip / valley</option>
-                </select>
-              </label>
-              <label>
-                Exponential display
-                <select value={state.preferences.exponent ? 'on' : 'off'} onChange={(event) => dispatch({ type: 'set-preference', key: 'exponent', value: event.target.value === 'on' })}>
-                  <option value="on">On</option><option value="off">Off</option>
-                </select>
-              </label>
-              <label>
-                Meter display
-                <select value={state.preferences.meterDecimals} onChange={(event) => dispatch({ type: 'set-preference', key: 'meterDecimals', value: event.target.value as 'fixed-3' | 'float' })}>
-                  <option value="fixed-3">Fixed 0.000</option><option value="float">Floating decimals</option>
-                </select>
-              </label>
-              <label>
-                Degree display
-                <select value={state.preferences.degreeDecimals} onChange={(event) => dispatch({ type: 'set-preference', key: 'degreeDecimals', value: event.target.value as 'float' | 'fixed-2' })}>
-                  <option value="float">Floating decimals</option><option value="fixed-2">Fixed 0.00°</option>
-                </select>
-              </label>
-              <label>
-                On-center spacing (in)
-                <input type="number" min="1" step="0.25" value={state.preferences.onCenter} onChange={(event) => dispatch({ type: 'set-preference', key: 'onCenter', value: Number(event.target.value) })} />
-              </label>
-              <label>
-                Desired riser (in)
-                <input type="number" min="1" step="0.0625" value={state.preferences.desiredRiser} onChange={(event) => dispatch({ type: 'set-preference', key: 'desiredRiser', value: Number(event.target.value) })} />
-              </label>
-              <label>
-                Desired tread (in)
-                <input type="number" min="1" step="0.25" value={state.preferences.treadWidth} onChange={(event) => dispatch({ type: 'set-preference', key: 'treadWidth', value: Number(event.target.value) })} />
-              </label>
-              <label>
-                Headroom (in)
-                <input type="number" min="1" step="1" value={state.preferences.headroom} onChange={(event) => dispatch({ type: 'set-preference', key: 'headroom', value: Number(event.target.value) })} />
-              </label>
-              <label>
-                Floor thickness (in)
-                <input type="number" min="1" step="1" value={state.preferences.floorThickness} onChange={(event) => dispatch({ type: 'set-preference', key: 'floorThickness', value: Number(event.target.value) })} />
-              </label>
-            </div>
-            <div className="preferences-actions">
-              <button type="button" className="reset-button" onClick={() => dispatch({ type: 'reset-preferences' })}>Reset defaults</button>
-              <button type="button" className="done-button" onClick={() => dispatch({ type: 'toggle-preferences', open: false })}>Done</button>
+          <section className="calculator-page" aria-label="Duct calculator" aria-hidden={activePage !== 2} inert={activePage !== 2}>
+            <div className="page-scroll duct-page">
+              <DuctCalculator />
             </div>
           </section>
         </div>
+        </div>
+
+        <nav className="page-dots" aria-label="Calculator screens">
+          {PAGE_NAMES.map((name, index) => (
+            <button
+              type="button"
+              key={name}
+              className={index === activePage ? 'active' : ''}
+              aria-label={`Open ${name} calculator`}
+              aria-current={index === activePage ? 'page' : undefined}
+              onClick={() => animateToPage(index)}
+            >
+              <span />
+            </button>
+          ))}
+        </nav>
+      </div>
+
+      {state.preferencesOpen ? (
+        <PreferencesDialog dialogRef={preferencesDialog} dispatch={dispatch} state={state} />
       ) : null}
     </main>
   );

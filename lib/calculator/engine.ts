@@ -127,7 +127,7 @@ export type CalculatorAction =
   | { type: 'set-preference'; key: keyof Preferences; value: Preferences[keyof Preferences] }
   | { type: 'reset-preferences' }
   | { type: 'toggle-preferences'; open?: boolean }
-  | { type: 'hydrate'; payload: Partial<PersistedCalculatorState> };
+  | { type: 'hydrate'; payload: unknown };
 
 const ZERO_DISPLAY: DisplayState = {
   label: 'READY',
@@ -163,6 +163,99 @@ export function persistedState(state: CalculatorState): PersistedCalculatorState
     irregularPitchSlope: state.irregularPitchSlope,
     memory: { m1: state.memory.m1, m2: state.memory.m2, m3: state.memory.m3 },
   };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isOption<T extends string>(value: unknown, options: readonly T[]): value is T {
+  return typeof value === 'string' && (options as readonly string[]).includes(value);
+}
+
+function sanitizeStoredValue(value: unknown): CalcValue | undefined {
+  if (!isRecord(value)) return undefined;
+  const unitOptions: CalcValue['unit'][] = [
+    'auto', 'ft-in', 'decimal-ft', 'decimal-in', 'in', 'm', 'mm',
+    'sq-ft', 'sq-in', 'sq-m', 'sq-mm', 'cu-ft', 'cu-in', 'cu-m', 'cu-mm',
+  ];
+  const systemOptions: CalcValue['system'][] = ['neutral', 'imperial', 'metric'];
+  if (
+    typeof value.amount !== 'number' || !Number.isFinite(value.amount) ||
+    typeof value.power !== 'number' || !Number.isFinite(value.power) ||
+    !isOption(value.unit, unitOptions) || !isOption(value.system, systemOptions)
+  ) return undefined;
+
+  const sanitized: CalcValue = {
+    amount: value.amount,
+    power: value.power,
+    unit: value.unit,
+    system: value.system,
+  };
+  if (typeof value.angle === 'boolean') sanitized.angle = value.angle;
+
+  if (isRecord(value.source)) {
+    const sourceUnits = ['ft', 'in', 'm', 'mm'] as const;
+    if (
+      typeof value.source.amount === 'number' && Number.isFinite(value.source.amount) &&
+      typeof value.source.power === 'number' && Number.isFinite(value.source.power) &&
+      isOption(value.source.unit, sourceUnits)
+    ) {
+      sanitized.source = {
+        amount: value.source.amount,
+        power: value.source.power,
+        unit: value.source.unit,
+      };
+    }
+  }
+  return sanitized;
+}
+
+export function sanitizePersistedState(value: unknown): PersistedCalculatorState {
+  const stored = isRecord(value) ? value : {};
+  const rawPreferences = isRecord(stored.preferences) ? stored.preferences : {};
+  const preferences: Preferences = { ...DEFAULT_PREFERENCES };
+  const fractionOptions = [2, 4, 8, 16, 32, 64] as const;
+  if (
+    typeof rawPreferences.fractionDenominator === 'number' &&
+    fractionOptions.includes(rawPreferences.fractionDenominator as typeof fractionOptions[number])
+  ) preferences.fractionDenominator = rawPreferences.fractionDenominator as typeof fractionOptions[number];
+
+  const numericPreferences = [
+    'treadWidth', 'headroom', 'floorThickness', 'desiredRiser', 'onCenter',
+  ] as const;
+  for (const key of numericPreferences) {
+    const candidate = rawPreferences[key];
+    if (typeof candidate === 'number' && Number.isFinite(candidate) && candidate > 0) {
+      preferences[key] = candidate;
+    }
+  }
+  for (const key of ['constantFraction', 'exponent'] as const) {
+    if (typeof rawPreferences[key] === 'boolean') preferences[key] = rawPreferences[key];
+  }
+  if (isOption(rawPreferences.areaFormat, ['standard', 'sq-ft', 'sq-m'] as const)) preferences.areaFormat = rawPreferences.areaFormat;
+  if (isOption(rawPreferences.volumeFormat, ['standard', 'cu-ft', 'cu-m'] as const)) preferences.volumeFormat = rawPreferences.volumeFormat;
+  if (isOption(rawPreferences.jackOrder, ['descending', 'ascending'] as const)) preferences.jackOrder = rawPreferences.jackOrder;
+  if (isOption(rawPreferences.irregularJackMode, ['oc-oc', 'mate'] as const)) preferences.irregularJackMode = rawPreferences.irregularJackMode;
+  if (isOption(rawPreferences.meterDecimals, ['fixed-3', 'float'] as const)) preferences.meterDecimals = rawPreferences.meterDecimals;
+  if (isOption(rawPreferences.degreeDecimals, ['float', 'fixed-2'] as const)) preferences.degreeDecimals = rawPreferences.degreeDecimals;
+  if (isOption(rawPreferences.mathMode, ['order', 'chain'] as const)) preferences.mathMode = rawPreferences.mathMode;
+
+  const rawMemory = isRecord(stored.memory) ? stored.memory : {};
+  const memory: PersistedCalculatorState['memory'] = {};
+  for (const slot of ['m1', 'm2', 'm3'] as const) {
+    const sanitized = sanitizeStoredValue(rawMemory[slot]);
+    if (sanitized) memory[slot] = sanitized;
+  }
+
+  const result: PersistedCalculatorState = { preferences, memory };
+  if (typeof stored.permanentPitchSlope === 'number' && Number.isFinite(stored.permanentPitchSlope)) {
+    result.permanentPitchSlope = stored.permanentPitchSlope;
+  }
+  if (typeof stored.irregularPitchSlope === 'number' && Number.isFinite(stored.irregularPitchSlope)) {
+    result.irregularPitchSlope = stored.irregularPitchSlope;
+  }
+  return result;
 }
 
 function displayFor(value: CalcValue, preferences: Preferences, label = '', note?: string): DisplayState {
@@ -454,6 +547,8 @@ function trig(state: CalculatorState, mode: 'sin' | 'cos' | 'tan' | 'asin' | 'ac
   const inverse = mode.startsWith('a');
   const numeric = input.value.amount;
   if (inverse && (mode === 'asin' || mode === 'acos') && Math.abs(numeric) > 1) throw new CalcError('TRIG Error');
+  const normalizedDegrees = ((numeric % 180) + 180) % 180;
+  if (mode === 'tan' && Math.abs(normalizedDegrees - 90) < 1e-10) throw new CalcError('TRIG Error');
   const functions = {
     sin: () => Math.sin(numeric * Math.PI / 180),
     cos: () => Math.cos(numeric * Math.PI / 180),
@@ -722,12 +817,20 @@ function memoryRecall(state: CalculatorState, slot: keyof MemoryState): Calculat
   };
 }
 
+function negateValue(value: CalcValue): CalcValue {
+  return {
+    ...value,
+    amount: -value.amount,
+    source: value.source ? { ...value.source, amount: -value.source.amount } : undefined,
+  };
+}
+
 function memoryPlus(state: CalculatorState, subtract = false): CalculatorState {
   const input = requireInput(state);
   const current = state.memory.cumulative;
   const value = current
     ? operate(current, subtract ? '-' : '+', input.value)
-    : { ...input.value, amount: subtract ? -input.value.amount : input.value.amount };
+    : subtract ? negateValue(input.value) : cloneValue(input.value);
   return showValue({ ...input.state, memory: { ...state.memory, cumulative: value } }, value, subtract ? 'M−' : 'M+');
 }
 
@@ -757,8 +860,7 @@ function velocity(state: CalculatorState): CalculatorState {
   const input = requireInput(state);
   if (input.value.power !== 0) throw new CalcError('DIM Error');
   const results = velocityPressureResults(input.value.amount);
-  const start = state.velocityCycleIndex % 4;
-  return setSequence({ ...input.state, velocityCycleIndex: (start + 1) % 4 }, 'velocity', results, '0', start);
+  return setSequence({ ...input.state, velocityCycleIndex: 0 }, 'velocity', results, '0');
 }
 
 function dms(state: CalculatorState): CalculatorState {
@@ -805,7 +907,7 @@ function changeSign(state: CalculatorState): CalculatorState {
     return { ...next, display: pendingDisplay(next) };
   }
   const input = requireInput(state);
-  return { ...showValue(input.state, { ...input.value, amount: -input.value.amount }, '+/−'), inputActive: true };
+  return { ...showValue(input.state, negateValue(input.value), '+/−'), inputActive: true };
 }
 
 function clearAll(state: CalculatorState): CalculatorState {
@@ -1075,11 +1177,13 @@ function press(state: CalculatorState, key: KeyId): CalculatorState {
 export function calculatorReducer(state: CalculatorState, action: CalculatorAction): CalculatorState {
   try {
     if (action.type === 'hydrate') {
+      const payload = sanitizePersistedState(action.payload);
       return {
         ...state,
-        ...action.payload,
-        preferences: { ...DEFAULT_PREFERENCES, ...action.payload.preferences },
-        memory: { ...state.memory, ...action.payload.memory },
+        preferences: payload.preferences,
+        memory: { ...state.memory, ...payload.memory },
+        permanentPitchSlope: payload.permanentPitchSlope,
+        irregularPitchSlope: payload.irregularPitchSlope,
       };
     }
     if (action.type === 'toggle-preferences') {
@@ -1121,7 +1225,7 @@ export function activeGuide(state: CalculatorState): { title: string; steps: str
   if (state.sequence?.id.includes('jack')) return { title: 'Jack rafters', steps: ['Keep pressing Jack to step through every rafter and cut angle.'] };
   if (state.sequence?.id === 'stairs') return { title: 'Stair layout', steps: ['Keep pressing Stair to cycle all 15 layout results.'] };
   return {
-    title: '4090 key workflow',
+    title: 'HVAC field workflow',
     steps: [
       'Enter a value, then press its unit or function key.',
       'Press Conv before a key to use the yellow function.',

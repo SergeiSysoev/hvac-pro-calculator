@@ -182,7 +182,7 @@ export function velocityPressureResults(input: number): NamedResult[] {
     {
       label: 'kPA',
       value: scalar((input / 1.3) ** 2),
-      note: '4090 compatibility: the original label is retained.',
+      note: 'Legacy workflow compatibility: the original label is retained.',
     },
     { label: 'ENTRY', value: scalar(input) },
   ];
@@ -330,6 +330,10 @@ export function stairResults(
   preferences: Preferences,
 ): NamedResult[] {
   if (rise === undefined && run === undefined) throw new CalcError('ENT Error');
+  if ((rise !== undefined && (!Number.isFinite(rise) || rise <= 0)) ||
+      (run !== undefined && (!Number.isFinite(run) || run <= 0))) {
+    throw new CalcError('DIM Error');
+  }
   let risers: number;
   let treads: number;
   let actualRiser: number;

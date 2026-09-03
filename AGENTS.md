@@ -1,27 +1,30 @@
-# HVAC 4090 Pro Agent Guide
+# Professional HVAC Calculator Agent Guide
 
 ## Role
 
-Maintain an accurate, independent web implementation of the Model 4090 working method.
+Maintain an accurate, independent, installable HVAC field calculator with three full-screen tools: Scientific, Trade and Duct.
 
 ## Product rules
 
-- Treat the official User’s Guide examples as golden behavior.
-- Do not invent functions absent from Model 4090. In particular: no psychrometrics, load calculations, temperature conversion, ductulator friction sizing, or equivalent-round sizing.
-- Keep formulas and methods compatible while preserving original branding and visual assets.
-- Never add Calculated Industries logos, product photos, manual text, or exact proprietary artwork.
-- Keep the independence notice visible.
-- The calculator must remain usable by touch at phone and tablet sizes.
-- Preserve keyboard accessibility, focus styles, reduced-motion support, and 44px touch targets where space allows.
+- Treat published engineering examples and the automated test suite as golden behavior.
+- Implement duct sizing from public ASHRAE equations; do not copy proprietary source code or artwork.
+- Preserve original branding and visual assets. Never add third-party logos, product photos or exact proprietary artwork.
+- Keep the independence and engineering-limit notices visible in project documentation and the Duct screen.
+- Keep all three screens usable by touch at phone and tablet sizes.
+- Preserve keyboard accessibility, visible focus, reduced-motion support and 44px minimum touch targets.
+- A single swipe may move only to an adjacent screen; all screens stay mounted so calculator state survives navigation.
 
 ## Architecture
 
-- `app/` — Vinext route, metadata, and global styles
-- `components/HvacCalculator.tsx` — interactive UI and persistence
-- `lib/calculator/core.ts` — dimensional values, expression evaluation, formatting
-- `lib/calculator/formulas.ts` — domain formulas and named result sequences
+- `app/` — Vinext route, metadata and full-screen global styles
+- `components/HvacCalculator.tsx` — three-screen pager, shared calculator state and persistence
+- `components/calculator/` — display, keypad, preferences and Duct screen components
+- `lib/calculator/core.ts` — dimensional values, expression evaluation and formatting
+- `lib/calculator/formulas.ts` — trade-domain formulas and named result sequences
+- `lib/calculator/duct.ts` — ASHRAE round-duct solver, unit conversion and rectangular equivalents
 - `lib/calculator/engine.ts` — physical-key state machine
-- `tests/` — golden examples and keypad sequences
+- `lib/carousel.ts` — swipe projection and edge physics
+- `tests/` — field-calculator examples, keypad sequences, duct pairs and carousel behavior
 
 ## Commands
 
@@ -35,4 +38,4 @@ npm run build
 
 ## Workflow
 
-Use `/deep` for research, `/shape` for planning, `/make` for execution, and `/audit` for review. Update golden tests whenever calculator behavior changes.
+Research unfamiliar HVAC behavior against primary public sources, implement it independently, update tests, verify the interface on a phone viewport, run the repository audit and publish both GitHub Pages and the configured Sites deployment.

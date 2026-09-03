@@ -336,11 +336,18 @@ function gcd(a: number, b: number): number {
 
 function compactNumber(value: number, maxDecimals = 8, exponent = true): string {
   if (!Number.isFinite(value)) throw new CalcError('0-fL0');
-  if (Math.abs(value) > 19_999_999.99) {
+  const magnitude = Math.abs(value);
+  if (magnitude > 19_999_999.99 || (magnitude > 0 && magnitude < 10 ** -maxDecimals)) {
     if (!exponent) throw new CalcError('0-fL0');
     return value.toExponential(6).replace('+', '');
   }
-  const rounded = Number(value.toFixed(maxDecimals));
+  const fixed = value.toFixed(maxDecimals);
+  if (!exponent) {
+    const [whole, fraction = ''] = fixed.split('.');
+    const significantFraction = fraction.replace(/0+$/, '');
+    return significantFraction ? `${whole}.${significantFraction}` : `${whole}.`;
+  }
+  const rounded = Number(fixed);
   return Number.isInteger(rounded) ? `${rounded}.` : String(rounded);
 }
 

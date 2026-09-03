@@ -181,6 +181,29 @@ describe('physical keypad workflow', () => {
     expect(entered.display.label).toBe('ENTRY');
   });
 
+  it('starts each new velocity-pressure conversion from FPM', () => {
+    const first = run([...digits('.049'), 'conv', '0']);
+    const second = run([...digits('.123'), 'conv', '0'], first);
+    expect(second.display.label).toBe('FPM');
+    expect(second.current?.amount).toBeCloseTo(1404.608, 3);
+  });
+
+  it('preserves a dimensional sign through products and first M− storage', () => {
+    const negativeArea = run([
+      '5', 'feet', 'conv', 'subtract', 'multiply', '2', 'feet', 'equals',
+    ]);
+    const memoryArea = run([
+      '5', 'feet', 'conv', 'mplus', 'recall', 'mplus', 'multiply', '2', 'feet', 'equals',
+    ]);
+    expect(negativeArea.current?.amount).toBe(-10 * 144);
+    expect(memoryArea.current?.amount).toBe(-10 * 144);
+  });
+
+  it('rejects tangent at odd right angles', () => {
+    expect(run(['9', '0', 'tan']).display.valueText).toBe('TRIG Error');
+    expect(run(['2', '7', '0', 'tan']).display.valueText).toBe('TRIG Error');
+  });
+
   it('completes dimensional percentage calculations without equals', () => {
     const state = run([
       ...digits('500'), 'feet', 'multiply',
@@ -247,5 +270,33 @@ describe('physical keypad workflow', () => {
     expect(cleared.preferences.treadWidth).toBe(11);
     const reset = calculatorReducer(cleared, { type: 'reset-preferences' });
     expect(reset.preferences.treadWidth).toBe(10);
+  });
+
+  it('sanitizes persisted calculator state before hydration', () => {
+    const hydrated = calculatorReducer(initialCalculatorState(), {
+      type: 'hydrate',
+      payload: {
+        powered: false,
+        preferences: {
+          fractionDenominator: 3,
+          onCenter: -4,
+          exponent: false,
+          areaFormat: 'unsupported',
+        },
+        permanentPitchSlope: Number.NaN,
+        memory: {
+          m1: { amount: 42, power: 0, unit: 'auto', system: 'neutral' },
+          m2: 'invalid',
+        },
+      },
+    });
+    expect(hydrated.powered).toBe(true);
+    expect(hydrated.preferences.fractionDenominator).toBe(16);
+    expect(hydrated.preferences.onCenter).toBe(16);
+    expect(hydrated.preferences.exponent).toBe(false);
+    expect(hydrated.preferences.areaFormat).toBe('standard');
+    expect(hydrated.permanentPitchSlope).toBeUndefined();
+    expect(hydrated.memory.m1?.amount).toBe(42);
+    expect(hydrated.memory.m2).toBeUndefined();
   });
 });

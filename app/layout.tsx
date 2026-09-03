@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import { Geist, Geist_Mono } from 'next/font/google';
 import './globals.css';
 
@@ -17,37 +17,45 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'HVAC 4090 Pro — Web Field Calculator',
+  title: 'Professional HVAC Calculator',
   description:
-    'An independent 4090-compatible calculator for sheet metal, HVAC, dimensional math, fan laws and field geometry.',
-  applicationName: 'HVAC 4090 Pro',
+    'A professional full-screen HVAC field calculator with scientific, trade geometry and ASHRAE equal-friction duct tools.',
+  applicationName: 'Professional HVAC Calculator',
   manifest: `${publicBasePath}/manifest.webmanifest`,
   icons: {
-    icon: `${publicBasePath}/og.png`,
-    apple: `${publicBasePath}/og.png`,
+    icon: `${publicBasePath}/icon.png`,
+    apple: `${publicBasePath}/icon.png`,
   },
   appleWebApp: {
     capable: true,
     statusBarStyle: 'black-translucent',
-    title: 'HVAC 4090',
+    title: 'HVAC Pro Calc',
   },
   openGraph: {
-    title: 'HVAC 4090 Pro — Web Field Calculator',
-    description: 'Sheet metal math, fan laws, field geometry and dimensional conversions in your browser.',
+    title: 'Professional HVAC Calculator',
+    description: 'Scientific math, sheet-metal trade geometry and ASHRAE equal-friction duct sizing in your browser.',
     type: 'website',
     images: [{
       url: socialImage,
-      width: 1734,
-      height: 907,
-      alt: 'HVAC 4090 Pro Web Field Calculator',
+      width: 1736,
+      height: 906,
+      alt: 'Professional HVAC Calculator — Scientific, Trade and Duct tools',
     }],
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'HVAC 4090 Pro — Web Field Calculator',
-    description: 'Sheet metal math, fan laws, field geometry and dimensional conversions in your browser.',
+    title: 'Professional HVAC Calculator',
+    description: 'Scientific math, sheet-metal trade geometry and ASHRAE equal-friction duct sizing in your browser.',
     images: [socialImage],
   },
+};
+
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  viewportFit: 'cover',
+  themeColor: '#101411',
+  colorScheme: 'dark',
 };
 
 export default function RootLayout({

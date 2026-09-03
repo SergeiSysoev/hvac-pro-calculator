@@ -12,7 +12,7 @@ import {
   velocityPressureResults,
 } from '@/lib/calculator/formulas';
 
-describe('4090 dimensional math', () => {
+describe('professional HVAC dimensional math', () => {
   it('uses order of operations by default', () => {
     const value = evaluateExpression([
       { type: 'value', value: scalar(10) },
@@ -36,8 +36,15 @@ describe('4090 dimensional math', () => {
 
   it('honors the exponential display preference', () => {
     expect(formatValue(scalar(20_000_000), DEFAULT_PREFERENCES).valueText).toContain('e');
+    expect(formatValue(scalar(1e-9), DEFAULT_PREFERENCES).valueText).toContain('e');
     expect(() => formatValue(scalar(20_000_000), { ...DEFAULT_PREFERENCES, exponent: false }))
       .toThrow('0-fL0');
+    expect(() => formatValue(scalar(1e-9), { ...DEFAULT_PREFERENCES, exponent: false }))
+      .toThrow('0-fL0');
+    expect(formatValue(scalar(1e-7), { ...DEFAULT_PREFERENCES, exponent: false }).valueText)
+      .toBe('0.0000001');
+    expect(formatValue(scalar(1e-8), { ...DEFAULT_PREFERENCES, exponent: false }).valueText)
+      .toBe('0.00000001');
   });
 
   it('honors standard and forced area formats for square millimeters', () => {
@@ -48,7 +55,7 @@ describe('4090 dimensional math', () => {
   });
 });
 
-describe('official 4090 guide examples', () => {
+describe('published field-calculator guide examples', () => {
   it('solves a 9-by-12 right triangle', () => {
     const solved = solveRightTriangle({ x: 144, y: 108 });
     expect(solved.r).toBe(180);
@@ -133,5 +140,10 @@ describe('official 4090 guide examples', () => {
     expect(find('RUN')).toBe(150);
     expect(nearlyEqual(find('STRG'), 186.94, 0.001)).toBe(true);
     expect(find('INCL')).toBeCloseTo(36.64003, 5);
+  });
+
+  it('rejects non-positive stair geometry', () => {
+    expect(() => stairResults(-60, undefined, DEFAULT_PREFERENCES)).toThrow('DIM Error');
+    expect(() => stairResults(undefined, 0, DEFAULT_PREFERENCES)).toThrow('DIM Error');
   });
 });

@@ -1,16 +1,16 @@
 {
-  "name": "HVAC 4090 Pro — Web Field Calculator",
-  "short_name": "HVAC 4090",
-  "description": "Independent 4090-compatible field calculator for sheet metal and HVAC work.",
+  "name": "Professional HVAC Calculator",
+  "short_name": "HVAC Pro Calc",
+  "description": "Scientific, trade geometry and ASHRAE duct calculations for HVAC field work.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#d9d8d2",
-  "theme_color": "#f3c400",
+  "background_color": "#090c0a",
+  "theme_color": "#101411",
   "icons": [
     {
-      "src": "./og.png",
-      "sizes": "any",
+      "src": "./icon.png",
+      "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     }
