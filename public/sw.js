@@ -1,5 +1,5 @@
 const CACHE_PREFIX = 'professional-hvac-calculator-';
-const CACHE_NAME = `${CACHE_PREFIX}v7`;
+const CACHE_NAME = `${CACHE_PREFIX}v8`;
 const BASE_PATH = new URL(self.registration.scope).pathname.replace(/\/$/, '');
 const scoped = (path) => `${BASE_PATH}${path}`;
 const APP_SHELL = [scoped('/'), scoped('/manifest.webmanifest'), scoped('/icon.png'), scoped('/og.png')];

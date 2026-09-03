@@ -96,9 +96,7 @@ export default function PhysicalCalculator({ active, state, onPress }: PhysicalC
   const lcdValueClass = lcdValueSizeClass(lcdValueText);
 
   return (
-    <div className={`physical-calculator ${state.modifier === 'convert' || state.modifier === 'recall-convert' ? 'convert-active' : ''}`}>
-      <div className="shell-detail shell-detail-left" aria-hidden="true" />
-      <div className="shell-detail shell-detail-right" aria-hidden="true" />
+    <div className="physical-calculator">
       <div className="calculator-face">
         <div className="brand-strip">
           <strong>PROFESSIONAL HVAC CALCULATOR</strong>
