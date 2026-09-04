@@ -342,6 +342,34 @@ button { -webkit-tap-highlight-color: transparent; }
   letter-spacing: -.1em;
 }
 
+.lcd-stacked-fraction {
+  display: inline-grid;
+  min-width: .72em;
+  margin-inline: .08em;
+  grid-template-rows: 1fr 1fr;
+  font-size: .58em;
+  font-weight: 650;
+  letter-spacing: 0;
+  line-height: .7;
+  text-align: center;
+  transform: translateY(-.04em);
+  vertical-align: middle;
+}
+
+.lcd-stacked-fraction > span:first-child {
+  border-bottom: .07em solid currentColor;
+}
+
+.lcd-exponent {
+  display: inline-block;
+  margin-left: .12em;
+  font-size: .48em;
+  font-weight: 650;
+  letter-spacing: 0;
+  transform: translateY(-.68em);
+  vertical-align: baseline;
+}
+
 .lcd-units {
   position: relative;
   z-index: 1;

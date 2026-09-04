@@ -142,12 +142,6 @@ export default function DuctCalculator() {
     return formatInput(imperialToDisplayValue(field, result.solution[field], unitSystem));
   };
 
-  const makeManual = (field: DuctField) => {
-    const alreadyManual = manualOrder.includes(field);
-    setManualOrder((current) => promoteDuctInput(current, field));
-    if (!alreadyManual) setRawValues((current) => ({ ...current, [field]: '' }));
-  };
-
   const updateField = (field: DuctField, value: string) => {
     setManualOrder((current) => promoteDuctInput(current, field));
     setRawValues((current) => ({ ...current, [field]: value }));
@@ -216,7 +210,9 @@ export default function DuctCalculator() {
                   aria-describedby={invalid ? DUCT_ERROR_ID : undefined}
                   value={displayedValue(field)}
                   placeholder={manualOrder.length < 2 || manual ? details.placeholder : ''}
-                  onFocus={() => makeManual(field)}
+                  onFocus={(event) => {
+                    if (!manual) event.currentTarget.select();
+                  }}
                   onChange={(event) => updateField(field, event.target.value)}
                   onBlur={() => releaseEmptyField(field)}
                 />
@@ -230,7 +226,7 @@ export default function DuctCalculator() {
       <div className="duct-helper" aria-live="polite">
         <span className="input-count">{manualOrder.length}/2</span>
         <p id={result.error ? DUCT_ERROR_ID : undefined}>{result.error ?? (result.solution
-          ? 'Solved. Tap any result to replace the oldest input.'
+          ? 'Solved. Edit any result to replace the oldest input.'
           : 'Enter any two values. The other two solve automatically.')}</p>
       </div>
 

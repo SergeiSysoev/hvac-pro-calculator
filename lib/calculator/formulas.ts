@@ -37,6 +37,8 @@ export interface CircleValues {
   height?: number;
 }
 
+const MAX_ENUMERATED_MEMBERS = 10_000;
+
 function lengthValue(inches: number, unit: CalcValue['unit'] = 'auto'): CalcValue {
   return { amount: inches, power: 1, unit, system: unit === 'm' || unit === 'mm' ? 'metric' : 'imperial' };
 }
@@ -138,7 +140,10 @@ export function diagonalCycle(values: TriangleValues): NamedResult[] {
 }
 
 export function lawOfCosines(a: number, b: number, c: number): NamedResult[] {
-  if (a <= 0 || b <= 0 || c <= 0 || a + b <= c || a + c <= b || b + c <= a) {
+  if (
+    ![a, b, c].every((side) => Number.isFinite(side) && side > 0)
+    || a + b <= c || a + c <= b || b + c <= a
+  ) {
     throw new CalcError('ENT Error');
   }
   const angle = (opposite: number, side1: number, side2: number) => {
@@ -148,13 +153,13 @@ export function lawOfCosines(a: number, b: number, c: number): NamedResult[] {
   const semi = (a + b + c) / 2;
   const area = Math.sqrt(semi * (semi - a) * (semi - b) * (semi - c));
   return [
-    { label: 'ANGLE A', value: degrees(angle(a, b, c)) },
-    { label: 'ANGLE B', value: degrees(angle(b, a, c)) },
-    { label: 'ANGLE C', value: degrees(angle(c, a, b)) },
+    { label: '∠A', value: degrees(angle(a, b, c)) },
+    { label: '∠B', value: degrees(angle(b, a, c)) },
+    { label: '∠C', value: degrees(angle(c, a, b)) },
     { label: 'AREA', value: areaValue(area) },
-    { label: 'SIDE A', value: lengthValue(a) },
-    { label: 'SIDE B', value: lengthValue(b) },
-    { label: 'SIDE C', value: lengthValue(c) },
+    { label: 'a', value: lengthValue(a) },
+    { label: 'b', value: lengthValue(b) },
+    { label: 'c', value: lengthValue(c) },
   ];
 }
 
@@ -184,7 +189,11 @@ export function solveFanLaw(
   registers: FanRegisters,
 ): { registers: Required<FanRegisters>; result: NamedResult } {
   const keys = ['a', 'aNew', 'b', 'bNew'] as const;
-  const missing = keys.filter((key) => !registers[key]);
+  const supplied = keys.filter((key) => registers[key] !== undefined && registers[key] !== 0);
+  if (supplied.some((key) => !Number.isFinite(registers[key]) || registers[key]! < 0)) {
+    throw new CalcError('ENT Error');
+  }
+  const missing = keys.filter((key) => registers[key] === undefined || registers[key] === 0);
   if (missing.length !== 1) throw new CalcError('ENT Error');
   const output = { ...registers } as Required<FanRegisters>;
   const exponent = law;
@@ -203,17 +212,17 @@ export function solveFanLaw(
     bNew: law === 1 ? 'RPMn FAN LAW' : law === 2 ? 'SPn FAN LAW' : 'BHPn FAN LAW',
   };
   const value = output[key];
-  if (!Number.isFinite(value)) throw new CalcError('ENT Error');
+  if (!Number.isFinite(value) || value <= 0) throw new CalcError('ENT Error');
   return { registers: output, result: { label: `${labels[key]} ${law}`, value: scalar(value) } };
 }
 
 export function velocityPressureResults(input: number): NamedResult[] {
-  if (input < 0) throw new CalcError('ENT Error');
+  if (!Number.isFinite(input) || input < 0) throw new CalcError('ENT Error');
   return [
     { label: 'FPM', value: scalar(4005 * Math.sqrt(input)) },
     { label: 'VP', value: scalar((input / 4005) ** 2) },
     { label: 'MPS', value: scalar(1.3 * Math.sqrt(input)) },
-    { label: 'kPA', value: scalar((input / 1.3) ** 2) },
+    { label: 'KPA', value: scalar((input / 1.3) ** 2) },
     { label: 'ENTRY', value: scalar(input) },
   ];
 }
@@ -245,28 +254,35 @@ export function circleResults(circle: CircleValues): NamedResult[] {
 
 export function arcResults(circle: CircleValues, onCenter = 16): NamedResult[] {
   const radius = circle.radius ?? (circle.diameter === undefined ? undefined : circle.diameter / 2);
-  if (!radius || radius <= 0) throw new CalcError('ENT Error');
+  if (!radius || radius <= 0 || !Number.isFinite(radius) || !Number.isFinite(onCenter) || onCenter <= 0) {
+    throw new CalcError('ENT Error');
+  }
   let theta = circle.arcDegrees;
   let arcLength = circle.arcLength;
   if (theta === undefined && arcLength === undefined) throw new CalcError('ENT Error');
   if (theta === undefined) theta = arcLength! / radius * 180 / Math.PI;
   if (arcLength === undefined) arcLength = radius * theta * Math.PI / 180;
+  if (!Number.isFinite(theta) || !Number.isFinite(arcLength) || theta <= 0 || theta > 360 || arcLength <= 0) {
+    throw new CalcError('ENT Error');
+  }
   const radians = theta * Math.PI / 180;
   const chord = 2 * radius * Math.sin(radians / 2);
   const segmentArea = radius ** 2 / 2 * (radians - Math.sin(radians));
   const sectorArea = radius ** 2 * radians / 2;
   const rise = radius * (1 - Math.cos(radians / 2));
   const results: NamedResult[] = [
-    { label: circle.arcDegrees === undefined ? 'ARC DEG' : 'ARC', value: circle.arcDegrees === undefined ? degrees(theta) : lengthValue(arcLength) },
-    { label: 'CHORD', value: lengthValue(chord) },
-    { label: 'SEG AREA', value: areaValue(segmentArea) },
-    { label: 'PIE AREA', value: areaValue(sectorArea) },
-    { label: 'SEG RISE', value: lengthValue(rise) },
+    { label: 'ARC', value: circle.arcDegrees === undefined ? degrees(theta) : lengthValue(arcLength) },
+    { label: 'CORD', value: lengthValue(chord) },
+    { label: 'SEG', value: areaValue(segmentArea) },
+    { label: 'PIE', value: areaValue(sectorArea) },
+    { label: 'RISE', value: lengthValue(rise) },
     { label: 'OC', value: lengthValue(onCenter, 'in') },
   ];
   const halfChord = chord / 2;
   const baseline = radius - rise;
-  for (let offset = onCenter, index = 1; offset < halfChord && index < 100; offset += onCenter, index += 1) {
+  const wallCount = Math.max(0, Math.ceil(halfChord / onCenter) - 1);
+  if (wallCount > MAX_ENUMERATED_MEMBERS) throw new CalcError('0-fL0');
+  for (let offset = onCenter, index = 1; offset < halfChord; offset += onCenter, index += 1) {
     const height = Math.max(0, Math.sqrt(radius ** 2 - offset ** 2) - baseline);
     results.push({ label: `AW${index}`, value: lengthValue(height) });
   }
@@ -274,12 +290,14 @@ export function arcResults(circle: CircleValues, onCenter = 16): NamedResult[] {
 }
 
 export function columnConeResults(radius: number, height: number): NamedResult[] {
-  if (radius <= 0 || height <= 0) throw new CalcError('ENT Error');
+  if (!Number.isFinite(radius) || !Number.isFinite(height) || radius <= 0 || height <= 0) {
+    throw new CalcError('ENT Error');
+  }
   const slant = Math.hypot(radius, height);
   return [
-    { label: 'COL VOL', value: volumeValue(Math.PI * radius ** 2 * height) },
+    { label: 'COL', value: volumeValue(Math.PI * radius ** 2 * height) },
     { label: 'COL AREA', value: areaValue(2 * Math.PI * radius * height + 2 * Math.PI * radius ** 2) },
-    { label: 'CONE VOL', value: volumeValue(Math.PI * radius ** 2 * height / 3) },
+    { label: 'CONE', value: volumeValue(Math.PI * radius ** 2 * height / 3) },
     { label: 'CONE AREA', value: areaValue(Math.PI * radius * slant + Math.PI * radius ** 2) },
   ];
 }
@@ -289,7 +307,10 @@ export function hipValleyResults(
   slope: number,
   irregularSlope?: number,
 ): NamedResult[] {
-  if (run <= 0 || slope <= 0) throw new CalcError('ENT Error');
+  if (
+    run <= 0 || slope <= 0 || !Number.isFinite(run) || !Number.isFinite(slope)
+    || (irregularSlope !== undefined && (!Number.isFinite(irregularSlope) || irregularSlope <= 0))
+  ) throw new CalcError('ENT Error');
   const rise = run * slope;
   const oppositeRun = irregularSlope ? rise / irregularSlope : run;
   const plan = Math.hypot(run, oppositeRun);
@@ -313,7 +334,11 @@ export function jackRafterResults(
   irregularSlope?: number,
   irregularFirst = false,
 ): NamedResult[] {
-  if (run <= 0 || slope <= 0) throw new CalcError('ENT Error');
+  if (
+    run <= 0 || slope <= 0 || !Number.isFinite(run) || !Number.isFinite(slope)
+    || !Number.isFinite(preferences.onCenter) || preferences.onCenter <= 0
+    || (irregularSlope !== undefined && (!Number.isFinite(irregularSlope) || irregularSlope <= 0))
+  ) throw new CalcError('ENT Error');
   const rise = run * slope;
   const oppositeRun = irregularSlope ? rise / irregularSlope : run;
   const makeSide = (
@@ -328,7 +353,10 @@ export function jackRafterResults(
       : otherRun;
     const decrement = preferences.onCenter * sideRun / spacingBasis;
     const values: NamedResult[] = [];
-    for (let index = 1; index < 100; index += 1) {
+    if (!Number.isFinite(decrement) || decrement <= 0) throw new CalcError('ENT Error');
+    const jackCount = Math.ceil(sideRun / decrement);
+    if (jackCount > MAX_ENUMERATED_MEMBERS) throw new CalcError('0-fL0');
+    for (let index = 1; ; index += 1) {
       const horizontal = Math.max(0, sideRun - index * decrement);
       values.push({ label: `${prefix}${index}`, value: lengthValue(horizontal * Math.sqrt(1 + sideSlope ** 2)) });
       if (horizontal === 0) break;
@@ -361,7 +389,7 @@ export function stairResults(
   run: number | undefined,
   preferences: Preferences,
 ): NamedResult[] {
-  if (rise === undefined && run === undefined) throw new CalcError('ENT Error');
+  if (rise === undefined && run === undefined) throw new CalcError('ERROR');
   if ((rise !== undefined && (!Number.isFinite(rise) || rise <= 0)) ||
       (run !== undefined && (!Number.isFinite(run) || run <= 0))) {
     throw new CalcError('DIM Error');
@@ -381,6 +409,7 @@ export function stairResults(
     actualRiser = preferences.desiredRiser;
     rise = risers * actualRiser;
   }
+  if (risers < 2 || treads < 1) throw new CalcError('DIM Error');
 
   if (run !== undefined) {
     actualTread = treads ? run / treads : 0;

@@ -1,4 +1,10 @@
+import {
+  MouseEvent as ReactMouseEvent,
+  PointerEvent as ReactPointerEvent,
+  useRef,
+} from 'react';
 import type { CalculatorState, KeyId } from '@/lib/calculator/engine';
+import LcdValue from '@/components/calculator/LcdValue';
 
 type PhysicalKey = {
   id: KeyId;
@@ -78,13 +84,45 @@ export function lcdValueSizeClass(valueText: string): string {
   return '';
 }
 
+function consumeSuppressedPointerClick(
+  event: ReactMouseEvent<HTMLButtonElement>,
+  suppressed: Set<number>,
+  finished: Set<number>,
+): boolean {
+  const pointerId = (event.nativeEvent as PointerEvent).pointerId;
+  let matchedPointer = suppressed.has(pointerId) ? pointerId : undefined;
+  // Older engines expose `click` as MouseEvent without pointerId. Pointer
+  // clicks have non-zero detail, so fall back to the oldest completed pointer
+  // without ever swallowing keyboard activation.
+  if (matchedPointer === undefined && event.detail > 0) {
+    matchedPointer = finished.values().next().value;
+  }
+  if (matchedPointer === undefined) return false;
+  suppressed.delete(matchedPointer);
+  finished.delete(matchedPointer);
+  return true;
+}
+
 interface PhysicalCalculatorProps {
   active: boolean;
   state: CalculatorState;
   onPress: (key: KeyId) => void;
+  onFactoryReset: () => void;
 }
 
-export default function PhysicalCalculator({ active, state, onPress }: PhysicalCalculatorProps) {
+export default function PhysicalCalculator({
+  active,
+  state,
+  onPress,
+  onFactoryReset,
+}: PhysicalCalculatorProps) {
+  const heldResetPointers = useRef(new Set<number>());
+  const resetOnPointers = useRef(new Set<number>());
+  const suppressedMultiplyPointers = useRef(new Set<number>());
+  const finishedMultiplyPointers = useRef(new Set<number>());
+  const suppressedOnPointers = useRef(new Set<number>());
+  const finishedOnPointers = useRef(new Set<number>());
+  const resetTriggered = useRef(false);
   const modifier = state.modifier === 'convert'
     ? 'CONV'
     : state.modifier === 'recall-convert'
@@ -94,6 +132,63 @@ export default function PhysicalCalculator({ active, state, onPress }: PhysicalC
       : '';
   const lcdValueText = state.powered ? state.display.valueText : '';
   const lcdValueClass = lcdValueSizeClass(lcdValueText);
+
+  const startResetHold = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (state.powered || event.button !== 0 || heldResetPointers.current.has(event.pointerId)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    heldResetPointers.current.add(event.pointerId);
+    suppressedMultiplyPointers.current.add(event.pointerId);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const finishResetHold = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const { pointerId } = event;
+    if (!heldResetPointers.current.delete(pointerId)) return;
+    event.stopPropagation();
+    if (event.currentTarget.hasPointerCapture(pointerId)) {
+      event.currentTarget.releasePointerCapture(pointerId);
+    }
+    if (heldResetPointers.current.size === 0) resetTriggered.current = false;
+    finishedMultiplyPointers.current.add(pointerId);
+    // `click` follows pointer-up. Clear on the next task as a fallback for a
+    // cancelled pointer, while still suppressing the click created by this hold.
+    window.setTimeout(() => {
+      suppressedMultiplyPointers.current.delete(pointerId);
+      finishedMultiplyPointers.current.delete(pointerId);
+    }, 0);
+  };
+
+  const triggerResetFromOn = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (state.powered || event.button !== 0 || heldResetPointers.current.size === 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!resetOnPointers.current.has(event.pointerId)) {
+      resetOnPointers.current.add(event.pointerId);
+      suppressedOnPointers.current.add(event.pointerId);
+      event.currentTarget.setPointerCapture(event.pointerId);
+    }
+    if (!resetTriggered.current) {
+      resetTriggered.current = true;
+      onFactoryReset();
+    }
+  };
+
+  const finishResetOn = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const { pointerId } = event;
+    if (!resetOnPointers.current.delete(pointerId)) return;
+    event.stopPropagation();
+    if (event.currentTarget.hasPointerCapture(pointerId)) {
+      event.currentTarget.releasePointerCapture(pointerId);
+    }
+    finishedOnPointers.current.add(pointerId);
+    // Normally the synthetic click consumes this flag. A cancelled pointer
+    // produces no click, so do not let it suppress a later ordinary On/C tap.
+    window.setTimeout(() => {
+      suppressedOnPointers.current.delete(pointerId);
+      finishedOnPointers.current.delete(pointerId);
+    }, 0);
+  };
 
   return (
     <div className="physical-calculator">
@@ -118,19 +213,40 @@ export default function PhysicalCalculator({ active, state, onPress }: PhysicalC
             <span>{modifier}</span>
           </div>
           <span className="lcd-mode">{state.powered ? state.display.label : ''}</span>
-          <span
+          <LcdValue
             className={`lcd-value ${lcdValueClass}`.trim()}
-            data-value-length={Array.from(lcdValueText).length}
-          >
-            {lcdValueText}
-          </span>
+            text={lcdValueText}
+            valueLength={Array.from(lcdValueText).length}
+          />
           <span className="lcd-units">{state.powered ? state.display.unitText : ''}</span>
         </div>
 
         <div className="power-row">
           <span className="reset-label">RESET</span>
           <button type="button" className="power-key power-off" onClick={() => onPress('off')}>Off</button>
-          <button type="button" className="power-key power-on" onClick={() => onPress('on')}>On/C</button>
+          <button
+            type="button"
+            className="power-key power-on"
+            style={{ touchAction: 'none' }}
+            onPointerDown={triggerResetFromOn}
+            onPointerUp={finishResetOn}
+            onPointerCancel={finishResetOn}
+            onLostPointerCapture={finishResetOn}
+            onClick={(event) => {
+              if (consumeSuppressedPointerClick(
+                event,
+                suppressedOnPointers.current,
+                finishedOnPointers.current,
+              )) {
+                event.preventDefault();
+                event.stopPropagation();
+                return;
+              }
+              onPress('on');
+            }}
+          >
+            On/C
+          </button>
         </div>
 
         <div className="physical-keypad" role="group" aria-label="Professional HVAC calculator keypad">
@@ -148,7 +264,23 @@ export default function PhysicalCalculator({ active, state, onPress }: PhysicalC
                   aria-label={`${key.primary}${key.detail ? ` ${key.detail}` : ''}${key.secondary ? `; Conv function ${key.secondary}` : ''}`}
                   aria-pressed={key.id === 'conv' ? latched : undefined}
                   data-key={key.id}
-                  onClick={() => onPress(key.id)}
+                  style={key.id === 'multiply' && !state.powered ? { touchAction: 'none' } : undefined}
+                  onPointerDown={key.id === 'multiply' ? startResetHold : undefined}
+                  onPointerUp={key.id === 'multiply' ? finishResetHold : undefined}
+                  onPointerCancel={key.id === 'multiply' ? finishResetHold : undefined}
+                  onLostPointerCapture={key.id === 'multiply' ? finishResetHold : undefined}
+                  onClick={(event) => {
+                    if (key.id === 'multiply' && consumeSuppressedPointerClick(
+                      event,
+                      suppressedMultiplyPointers.current,
+                      finishedMultiplyPointers.current,
+                    )) {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      return;
+                    }
+                    onPress(key.id);
+                  }}
                 >
                   <span>{key.primary}</span>
                   {key.detail ? <small>{key.detail}</small> : null}

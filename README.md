@@ -14,6 +14,8 @@ Swipe left or right, or use the three dots at the bottom, to change screens. Pre
 
 ## Engineering basis
 
+The HVAC/Trade engine is checked against the published Model 4090 key definitions, examples, error codes, preference rules and reset workflow in User's Guide revision UG4090E-E (January 2025). Regression tests reproduce documented keystroke sequences for dimensional math, D:M:S, trigonometry, right triangles, Law of Cosines, offsets, fan laws, velocity pressure, circles/arcs, columns/cones, roof geometry, stairs, memory and preferences.
+
 The duct screen is an independent implementation of the ASHRAE equal-friction method. It uses Darcy-Weisbach pressure loss, the Colebrook friction factor, standard-air assumptions and the ASHRAE/Huebscher equivalent rectangular relationship. The six possible pairs of duct inputs are covered by automated tests.
 
 The calculation applies to straight average sheet-metal duct at standard air conditions. Add fittings, transitions, dampers, equipment, leakage and project-specific design requirements separately.
@@ -38,6 +40,10 @@ npm run build
 
 ## Public sources
 
+- [Calculated Industries Sheet Metal/HVAC Pro product page](https://www.calculated.com/mobile/prd722/Sheet-Metal-HVAC-Pro.html)
+- [Model 4090 User's Guide, UG4090E-E](https://www.calculated.com/UGFiles/UG4090E-E.pdf)
+- [Model 4090 Pocket Reference Guide, PRG4090E-D](https://www.calculated.com/UGFiles/PRG4090E-D.pdf)
+- [Model 4090 official specification sheet](https://www.calculated.com/artwork/4090-CI_SPEC-4C.pdf)
 - [ASHRAE Handbook — Duct Design](https://handbook.ashrae.org/Handbooks/F25/IP/F25_Ch21/F25_Ch21_ip.aspx)
 - [Reference app listing — Trade Calculator: Sheet Metal](https://apps.apple.com/us/app/trade-calculator-sheet-metal/id6758922258)
 - [Reference app support description](https://github.com/EODMATT1980/trade-calculator/blob/main/support.html)

@@ -1,4 +1,5 @@
 import type { CalculatorState } from '@/lib/calculator/engine';
+import LcdValue from '@/components/calculator/LcdValue';
 
 interface CalculatorDisplayProps {
   active: boolean;
@@ -30,7 +31,7 @@ export default function CalculatorDisplay({ active, state }: CalculatorDisplayPr
           <span>{modifier}</span>
         </div>
         <span className="display-mode">{state.powered ? state.display.label : 'OFF'}</span>
-        <span className="display-value">{state.powered ? state.display.valueText : ''}</span>
+        <LcdValue className="display-value" text={state.powered ? state.display.valueText : ''} />
         <span className="display-unit">{state.powered ? state.display.unitText : ''}</span>
       </div>
       {state.display.note ? <p className="display-note">{state.display.note}</p> : null}

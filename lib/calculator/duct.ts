@@ -45,7 +45,31 @@ export const DUCT_CONVERSIONS = {
 } as const;
 
 const REYNOLDS_STANDARD_AIR = 8.5;
+const LAMINAR_REYNOLDS_LIMIT = 2_300;
+const REYNOLDS_BOUNDARY_EPSILON = 1e-12;
+const TURBULENT_BOUNDARY_FACTOR = 1 + 1e-9;
 const VELOCITY_CONSTANT = 576 / Math.PI;
+
+function frictionTolerance(value: number): number {
+  return Math.max(value * 1e-9, 1e-12);
+}
+
+function transitionRangeError(): RangeError {
+  return new RangeError('The entered values fall in an unsupported flow-transition range.');
+}
+
+function ambiguousFlowError(): RangeError {
+  return new RangeError('The entered values have multiple valid laminar and turbulent solutions.');
+}
+
+function laminarBoundaryFriction(
+  velocityFpm: number,
+  diameterIn: number,
+  conditions: DuctConditions,
+): number {
+  return 1200 * (64 / LAMINAR_REYNOLDS_LIMIT) * conditions.densityLbFt3 /
+    diameterIn * (velocityFpm / 1097) ** 2;
+}
 
 export function parseDuctEntry(value: string): number | undefined {
   const compact = value.trim().replace(/[\s\u00a0\u202f]/g, '');
@@ -117,7 +141,9 @@ export function ductFrictionFactor(
     throw new RangeError('Roughness must be a non-negative finite number.');
   }
 
-  if (reynolds <= 2300) return 64 / reynolds;
+  if (reynolds <= LAMINAR_REYNOLDS_LIMIT * (1 + REYNOLDS_BOUNDARY_EPSILON)) {
+    return 64 / reynolds;
+  }
 
   const relativeRoughness = 12 * roughnessFt / diameterIn;
   let inverseRoot = 1 / Math.sqrt(0.02);
@@ -154,37 +180,71 @@ function solveMonotonic(
   target: number,
   valueAt: (input: number) => number,
   direction: 'increasing' | 'decreasing',
+  initialLow = 0.05,
+  initialHigh = 100,
+  bounds: { minimum?: number; maximum?: number } = {},
 ): number {
   requirePositive(target, 'Target');
-  let low = 0.05;
-  let high = 100;
+  const minimum = bounds.minimum ?? Number.MIN_VALUE;
+  const maximum = bounds.maximum ?? Number.POSITIVE_INFINITY;
+  const boundedByFlowRegime = bounds.minimum !== undefined || bounds.maximum !== undefined;
+  const unsupportedRange = () => new RangeError(boundedByFlowRegime
+    ? 'The entered values fall in an unsupported flow-transition range.'
+    : 'The entered values are outside the supported duct-sizing range.');
+  let low = Math.max(initialLow, minimum);
+  let high = Math.min(Math.max(initialHigh, low * 2), maximum);
+  const tolerance = Math.max(target * 1e-12, Number.MIN_VALUE);
+
+  if (!(low <= high) || !Number.isFinite(low) || low <= 0) {
+    throw unsupportedRange();
+  }
+  if (Math.abs(valueAt(low) - target) <= tolerance) return low;
+  if (Math.abs(valueAt(high) - target) <= tolerance) return high;
 
   for (let index = 0; index < 40; index += 1) {
     const lowDelta = valueAt(low) - target;
     const highDelta = valueAt(high) - target;
-    if (lowDelta === 0) return low;
-    if (highDelta === 0) return high;
+    if (Math.abs(lowDelta) <= tolerance) return low;
+    if (Math.abs(highDelta) <= tolerance) return high;
     if (lowDelta * highDelta < 0) break;
 
+    let expanded = false;
     if (direction === 'increasing') {
-      if (lowDelta > 0) low /= 2;
-      if (highDelta < 0) high *= 2;
+      if (lowDelta > 0 && low > minimum) {
+        const next = Math.max(low / 2, minimum);
+        expanded ||= next !== low;
+        low = next;
+      }
+      if (highDelta < 0 && high < maximum) {
+        const next = Math.min(high * 2, maximum);
+        expanded ||= next !== high;
+        high = next;
+      }
     } else {
-      if (lowDelta < 0) low /= 2;
-      if (highDelta > 0) high *= 2;
+      if (lowDelta < 0 && low > minimum) {
+        const next = Math.max(low / 2, minimum);
+        expanded ||= next !== low;
+        low = next;
+      }
+      if (highDelta > 0 && high < maximum) {
+        const next = Math.min(high * 2, maximum);
+        expanded ||= next !== high;
+        high = next;
+      }
     }
+    if (!expanded) break;
   }
 
   const lowDelta = valueAt(low) - target;
   const highDelta = valueAt(high) - target;
   if (!Number.isFinite(lowDelta) || !Number.isFinite(highDelta) || lowDelta * highDelta > 0) {
-    throw new RangeError('The entered values are outside the supported duct-sizing range.');
+    throw unsupportedRange();
   }
 
   for (let index = 0; index < 80; index += 1) {
     const middle = Math.sqrt(low * high);
     const delta = valueAt(middle) - target;
-    if (Math.abs(delta) <= Math.max(target * 1e-11, 1e-12)) return middle;
+    if (Math.abs(delta) <= tolerance) return middle;
 
     if (direction === 'increasing') {
       if (delta < 0) low = middle;
@@ -228,29 +288,129 @@ export function solveRoundDuct(
   } else if (velocityFpm !== undefined && diameterIn !== undefined) {
     airflowCfm = airflowFromVelocityAndDiameter(velocityFpm, diameterIn);
   } else if (airflowCfm !== undefined && frictionRate !== undefined) {
-    diameterIn = solveMonotonic(
-      frictionRate,
-      (diameter) => ductFrictionRate(
-        velocityFromAirflowAndDiameter(airflowCfm!, diameter),
-        diameter,
-        conditions,
-      ),
-      'decreasing',
+    const densityScale = conditions.densityLbFt3 / STANDARD_DUCT_CONDITIONS.densityLbFt3;
+    const boundaryDiameter = REYNOLDS_STANDARD_AIR * VELOCITY_CONSTANT *
+      airflowCfm * densityScale / LAMINAR_REYNOLDS_LIMIT;
+    const turbulentMaximum = boundaryDiameter / TURBULENT_BOUNDARY_FACTOR;
+    const laminarMinimum = boundaryDiameter * TURBULENT_BOUNDARY_FACTOR;
+    const frictionAt = (diameter: number) => ductFrictionRate(
+      velocityFromAirflowAndDiameter(airflowCfm!, diameter),
+      diameter,
+      conditions,
     );
+    const boundaryVelocity = velocityFromAirflowAndDiameter(airflowCfm, boundaryDiameter);
+    const laminarBoundary = laminarBoundaryFriction(boundaryVelocity, boundaryDiameter, conditions);
+    const turbulentBoundaryFriction = frictionAt(turbulentMaximum);
+    const tolerance = frictionTolerance(frictionRate);
+
+    if (turbulentBoundaryFriction < laminarBoundary - tolerance &&
+        frictionRate >= turbulentBoundaryFriction - tolerance &&
+        frictionRate <= laminarBoundary + tolerance) {
+      throw ambiguousFlowError();
+    }
+    if (Math.abs(frictionRate - laminarBoundary) <= tolerance) {
+      diameterIn = boundaryDiameter;
+    } else if (frictionRate < laminarBoundary) {
+      diameterIn = solveMonotonic(
+        frictionRate,
+        frictionAt,
+        'decreasing',
+        laminarMinimum,
+        Math.max(100, laminarMinimum * 2),
+        { minimum: laminarMinimum },
+      );
+    } else if (frictionRate >= turbulentBoundaryFriction - tolerance) {
+      diameterIn = solveMonotonic(
+        frictionRate,
+        frictionAt,
+        'decreasing',
+        Math.min(0.05, turbulentMaximum / 2),
+        turbulentMaximum,
+        { maximum: turbulentMaximum },
+      );
+    } else {
+      throw transitionRangeError();
+    }
     velocityFpm = velocityFromAirflowAndDiameter(airflowCfm, diameterIn);
   } else if (velocityFpm !== undefined && frictionRate !== undefined) {
-    diameterIn = solveMonotonic(
-      frictionRate,
-      (diameter) => ductFrictionRate(velocityFpm!, diameter, conditions),
-      'decreasing',
-    );
+    const densityScale = conditions.densityLbFt3 / STANDARD_DUCT_CONDITIONS.densityLbFt3;
+    const boundaryDiameter = LAMINAR_REYNOLDS_LIMIT /
+      (REYNOLDS_STANDARD_AIR * velocityFpm * densityScale);
+    const turbulentMinimum = boundaryDiameter * TURBULENT_BOUNDARY_FACTOR;
+    const laminarMaximum = boundaryDiameter / TURBULENT_BOUNDARY_FACTOR;
+    const frictionAt = (diameter: number) => ductFrictionRate(velocityFpm!, diameter, conditions);
+    const laminarBoundary = laminarBoundaryFriction(velocityFpm, boundaryDiameter, conditions);
+    const turbulentBoundaryFriction = frictionAt(turbulentMinimum);
+    const tolerance = frictionTolerance(frictionRate);
+
+    if (turbulentBoundaryFriction > laminarBoundary) {
+      if (frictionRate >= laminarBoundary - tolerance &&
+          frictionRate <= turbulentBoundaryFriction + tolerance) {
+        throw ambiguousFlowError();
+      }
+    } else if (frictionRate <= laminarBoundary + tolerance &&
+               frictionRate >= turbulentBoundaryFriction - tolerance) {
+      throw transitionRangeError();
+    }
+    if (frictionRate > Math.max(laminarBoundary, turbulentBoundaryFriction)) {
+      diameterIn = solveMonotonic(
+        frictionRate,
+        frictionAt,
+        'decreasing',
+        Math.min(0.05, laminarMaximum / 2),
+        laminarMaximum,
+        { maximum: laminarMaximum },
+      );
+    } else {
+      diameterIn = solveMonotonic(
+        frictionRate,
+        frictionAt,
+        'decreasing',
+        turbulentMinimum,
+        Math.max(100, turbulentMinimum * 2),
+        { minimum: turbulentMinimum },
+      );
+    }
     airflowCfm = airflowFromVelocityAndDiameter(velocityFpm, diameterIn);
   } else if (diameterIn !== undefined && frictionRate !== undefined) {
-    velocityFpm = solveMonotonic(
-      frictionRate,
-      (velocity) => ductFrictionRate(velocity, diameterIn!, conditions),
-      'increasing',
-    );
+    const densityScale = conditions.densityLbFt3 / STANDARD_DUCT_CONDITIONS.densityLbFt3;
+    const boundaryVelocity = LAMINAR_REYNOLDS_LIMIT /
+      (REYNOLDS_STANDARD_AIR * diameterIn * densityScale);
+    const turbulentMinimum = boundaryVelocity * TURBULENT_BOUNDARY_FACTOR;
+    const laminarMaximum = boundaryVelocity / TURBULENT_BOUNDARY_FACTOR;
+    const frictionAt = (velocity: number) => ductFrictionRate(velocity, diameterIn!, conditions);
+    const laminarBoundary = laminarBoundaryFriction(boundaryVelocity, diameterIn, conditions);
+    const turbulentBoundaryFriction = frictionAt(turbulentMinimum);
+    const tolerance = frictionTolerance(frictionRate);
+
+    if (turbulentBoundaryFriction < laminarBoundary - tolerance &&
+        frictionRate >= turbulentBoundaryFriction - tolerance &&
+        frictionRate <= laminarBoundary + tolerance) {
+      throw ambiguousFlowError();
+    }
+    if (Math.abs(frictionRate - laminarBoundary) <= tolerance) {
+      velocityFpm = boundaryVelocity;
+    } else if (frictionRate < laminarBoundary) {
+      velocityFpm = solveMonotonic(
+        frictionRate,
+        frictionAt,
+        'increasing',
+        Math.min(0.05, laminarMaximum / 2),
+        laminarMaximum,
+        { maximum: laminarMaximum },
+      );
+    } else if (frictionRate >= turbulentBoundaryFriction - tolerance) {
+      velocityFpm = solveMonotonic(
+        frictionRate,
+        frictionAt,
+        'increasing',
+        turbulentMinimum,
+        Math.max(100, turbulentMinimum * 2),
+        { minimum: turbulentMinimum },
+      );
+    } else {
+      throw transitionRangeError();
+    }
     airflowCfm = airflowFromVelocityAndDiameter(velocityFpm, diameterIn);
   }
 

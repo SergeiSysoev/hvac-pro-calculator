@@ -277,6 +277,11 @@ export default function HvacCalculator() {
     if ('vibrate' in navigator) navigator.vibrate?.(7);
   }, [state.modifier]);
 
+  const factoryReset = useCallback(() => {
+    dispatch({ type: 'factory-reset' });
+    if ('vibrate' in navigator) navigator.vibrate?.(20);
+  }, []);
+
   const openPreferences = useCallback(() => {
     if (document.activeElement instanceof HTMLElement) preferencesOpener.current = document.activeElement;
     dispatch({ type: 'toggle-preferences', open: true });
@@ -295,6 +300,7 @@ export default function HvacCalculator() {
   }, [openPreferences, state.preferences.fractionDenominator]);
 
   useEffect(() => {
+    let resetMultiplyHeld = false;
     const onKeyDown = (event: KeyboardEvent) => {
       if (state.preferencesOpen && event.key === 'Escape') {
         event.preventDefault();
@@ -302,14 +308,50 @@ export default function HvacCalculator() {
         return;
       }
       if (state.preferencesOpen || activePage === 2) return;
+
+      // The reset chord remains available after clicking Off (the Off button
+      // retains focus, so the regular global keyboard mapper intentionally
+      // ignores it as an interactive target).
+      if (!state.powered && event.key === '*') {
+        event.preventDefault();
+        resetMultiplyHeld = true;
+        return;
+      }
+      if (!state.powered && event.key === 'Escape' && resetMultiplyHeld) {
+        event.preventDefault();
+        resetMultiplyHeld = false;
+        factoryReset();
+        return;
+      }
+
       const key = calculatorKeyForKeyboardEvent(event.key, event.target, document.activeElement);
       if (!key) return;
       event.preventDefault();
       press(key);
     };
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (event.key === '*' || event.code === 'Digit8' || event.code === 'NumpadMultiply') {
+        resetMultiplyHeld = false;
+      }
+    };
+    const clearResetHold = () => { resetMultiplyHeld = false; };
     window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [activePage, press, state.preferencesOpen]);
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', clearResetHold);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', clearResetHold);
+    };
+  }, [activePage, factoryReset, press, state.powered, state.preferencesOpen]);
+
+  useEffect(() => {
+    if (!state.powered || state.display.valueText !== 'ALL rESEt') return;
+    const timeout = window.setTimeout(() => {
+      dispatch({ type: 'press', key: 'on' });
+    }, 1000);
+    return () => window.clearTimeout(timeout);
+  }, [state.display.valueText, state.powered]);
 
   useEffect(() => {
     if (!state.preferencesOpen) return;
@@ -441,7 +483,12 @@ export default function HvacCalculator() {
         >
           <section className="calculator-page" aria-label="Professional HVAC calculator" aria-hidden={activePage !== 0} inert={activePage !== 0}>
             <div className="page-scroll physical-page">
-              <PhysicalCalculator active={activePage === 0} state={state} onPress={press} />
+              <PhysicalCalculator
+                active={activePage === 0}
+                state={state}
+                onPress={press}
+                onFactoryReset={factoryReset}
+              />
             </div>
           </section>
 

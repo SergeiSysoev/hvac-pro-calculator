@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DuctField,
   MAX_RECTANGULAR_FRICTION_DIFFERENCE_PERCENT,
+  airflowFromVelocityAndDiameter,
   displayToImperialValue,
   ductFrictionRate,
   ductReynolds,
@@ -73,6 +74,137 @@ describe('ASHRAE round duct solver', () => {
       .toThrow('flow-transition');
     expect(() => solveRoundDuct({ diameterIn: 10, frictionRate: 0.00025 }))
       .toThrow('flow-transition');
+  });
+
+  it('does not select a false turbulent root for a laminar velocity/friction pair', () => {
+    const laminarVelocity = 40;
+    const laminarDiameter = 6;
+    const laminarFriction = ductFrictionRate(laminarVelocity, laminarDiameter);
+
+    expect(() => solveRoundDuct({
+      velocityFpm: laminarVelocity,
+      frictionRate: laminarFriction,
+    })).toThrow(/multiple valid|supported|flow-transition/);
+  });
+
+  it('solves a unique laminar velocity/friction pair', () => {
+    const laminarVelocity = 40;
+    const laminarDiameter = 1;
+    const laminarFriction = ductFrictionRate(laminarVelocity, laminarDiameter);
+    const result = solveRoundDuct({
+      velocityFpm: laminarVelocity,
+      frictionRate: laminarFriction,
+    });
+
+    expect(result.diameterIn).toBeCloseTo(laminarDiameter, 7);
+    expect(result.reynolds).toBeCloseTo(340, 7);
+  });
+
+  it('solves unique laminar airflow/friction and diameter/friction pairs', () => {
+    const laminarAirflow = 100;
+    const laminarDiameter = 100;
+    const laminarVelocity = velocityFromAirflowAndDiameter(laminarAirflow, laminarDiameter);
+    const laminarFriction = ductFrictionRate(laminarVelocity, laminarDiameter);
+
+    const fromAirflow = solveRoundDuct({
+      airflowCfm: laminarAirflow,
+      frictionRate: laminarFriction,
+    });
+    const fromDiameter = solveRoundDuct({
+      diameterIn: laminarDiameter,
+      frictionRate: laminarFriction,
+    });
+
+    expect(fromAirflow.diameterIn).toBeCloseTo(laminarDiameter, 6);
+    expect(fromAirflow.reynolds).toBeLessThanOrEqual(2300);
+    expect(fromDiameter.velocityFpm).toBeCloseTo(laminarVelocity, 6);
+    expect(fromDiameter.reynolds).toBeLessThanOrEqual(2300);
+  });
+
+  it('solves the laminar boundary when the inverse pair has one physical root', () => {
+    const boundaryDiameter = 10;
+    const boundaryVelocity = 2300 / (8.5 * boundaryDiameter);
+    const boundaryAirflow = airflowFromVelocityAndDiameter(boundaryVelocity, boundaryDiameter);
+    const boundaryFriction = ductFrictionRate(boundaryVelocity, boundaryDiameter);
+
+    const fromAirflow = solveRoundDuct({
+      airflowCfm: boundaryAirflow,
+      frictionRate: boundaryFriction,
+    });
+    const fromDiameter = solveRoundDuct({
+      diameterIn: boundaryDiameter,
+      frictionRate: boundaryFriction,
+    });
+
+    expect(fromAirflow.reynolds).toBeCloseTo(2300, 5);
+    expect(fromAirflow.diameterIn).toBeCloseTo(boundaryDiameter, 7);
+    expect(fromAirflow.frictionRate).toBeCloseTo(boundaryFriction, 12);
+    expect(fromDiameter.reynolds).toBeCloseTo(2300, 5);
+    expect(fromDiameter.velocityFpm).toBeCloseTo(boundaryVelocity, 7);
+    expect(fromDiameter.frictionRate).toBeCloseTo(boundaryFriction, 12);
+    expect(() => solveRoundDuct({
+      velocityFpm: boundaryVelocity,
+      frictionRate: boundaryFriction,
+    })).toThrow('multiple valid');
+  });
+
+  it.each([2299.99885, 2300.00115])(
+    'accepts valid inverse roots immediately beside the flow boundary at Re=%s',
+    (reynolds) => {
+      const diameter = 10;
+      const velocity = reynolds / (8.5 * diameter);
+      const airflow = airflowFromVelocityAndDiameter(velocity, diameter);
+      const friction = ductFrictionRate(velocity, diameter);
+
+      const fromAirflow = solveRoundDuct({ airflowCfm: airflow, frictionRate: friction });
+      const fromDiameter = solveRoundDuct({ diameterIn: diameter, frictionRate: friction });
+
+      expect(fromAirflow.reynolds).toBeCloseTo(reynolds, 5);
+      expect(fromAirflow.frictionRate).toBeCloseTo(friction, 12);
+      expect(fromDiameter.reynolds).toBeCloseTo(reynolds, 5);
+      expect(fromDiameter.frictionRate).toBeCloseTo(friction, 12);
+    },
+  );
+
+  it.each([
+    'airflow-friction',
+    'velocity-friction',
+    'diameter-friction',
+  ] as const)('solves a turbulent Reynolds 5,000 reference for %s', (pair) => {
+    const boundaryAirflow = 1000;
+    const boundaryDiameter = 8.5 * (576 / Math.PI) * boundaryAirflow / 5_000;
+    const boundaryVelocity = velocityFromAirflowAndDiameter(boundaryAirflow, boundaryDiameter);
+    const boundaryFriction = ductFrictionRate(boundaryVelocity, boundaryDiameter);
+    const inputs = pair === 'airflow-friction'
+      ? { airflowCfm: boundaryAirflow, frictionRate: boundaryFriction }
+      : pair === 'velocity-friction'
+        ? { velocityFpm: boundaryVelocity, frictionRate: boundaryFriction }
+        : { diameterIn: boundaryDiameter, frictionRate: boundaryFriction };
+    const result = solveRoundDuct(inputs);
+
+    expect(result.reynolds).toBeCloseTo(5_000, 5);
+    expect(result.airflowCfm).toBeCloseTo(boundaryAirflow, 5);
+    expect(result.diameterIn).toBeCloseTo(boundaryDiameter, 7);
+    expect(result.velocityFpm).toBeCloseTo(boundaryVelocity, 7);
+  });
+
+  it('keeps inverse branches correct with custom air density', () => {
+    const conditions = { densityLbFt3: 0.06, roughnessFt: 0.0005 };
+    const diameter = 12;
+    const velocity = 5_000 / (8.5 * diameter * (conditions.densityLbFt3 / 0.075));
+    const airflow = airflowFromVelocityAndDiameter(velocity, diameter);
+    const friction = ductFrictionRate(velocity, diameter, conditions);
+
+    for (const inputs of [
+      { airflowCfm: airflow, frictionRate: friction },
+      { velocityFpm: velocity, frictionRate: friction },
+      { diameterIn: diameter, frictionRate: friction },
+    ]) {
+      const result = solveRoundDuct(inputs, conditions);
+      expect(result.reynolds).toBeCloseTo(5_000, 5);
+      expect(result.diameterIn).toBeCloseTo(diameter, 7);
+      expect(result.velocityFpm).toBeCloseTo(velocity, 7);
+    }
   });
 });
 

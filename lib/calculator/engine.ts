@@ -2,7 +2,9 @@ import {
   CalcError,
   CalcValue,
   DEFAULT_PREFERENCES,
+  DISPLAY_MAX,
   ExpressionToken,
+  FractionResolution,
   FormattedValue,
   Operator,
   Preferences,
@@ -87,6 +89,8 @@ export interface HistoryItem {
   result: string;
 }
 
+type LinearResultUnit = 'ft-in' | 'in' | 'm' | 'mm';
+
 export interface CalculatorState {
   powered: boolean;
   preferences: Preferences;
@@ -109,12 +113,15 @@ export interface CalculatorState {
   registers: SharedRegisters;
   triangle: TriangleValues;
   triangleInputs: Array<keyof TriangleValues>;
+  triangleUnits: Partial<Record<keyof TriangleValues, LinearResultUnit>>;
   triangleUnitless?: boolean;
   permanentPitchSlope?: number;
   irregularPitchSlope?: number;
   circle: CircleValues;
+  circleResultUnit?: LinearResultUnit;
+  circleRadiusUnit?: LinearResultUnit;
   sequence?: SequenceState;
-  resultUnit?: 'ft-in' | 'in' | 'm' | 'mm';
+  resultUnit?: LinearResultUnit;
   velocityCycleIndex: number;
   lastKey?: KeyId;
   history: HistoryItem[];
@@ -131,6 +138,7 @@ export type CalculatorAction =
   | { type: 'press'; key: KeyId }
   | { type: 'set-preference'; key: keyof Preferences; value: Preferences[keyof Preferences] }
   | { type: 'reset-preferences' }
+  | { type: 'factory-reset' }
   | { type: 'toggle-preferences'; open?: boolean }
   | { type: 'hydrate'; payload: unknown };
 
@@ -140,6 +148,8 @@ const ZERO_DISPLAY: DisplayState = {
   unitText: '',
   plainText: '0',
 };
+
+const FRACTION_RESOLUTIONS = [2, 4, 8, 16, 32, 64] as const;
 
 export function initialCalculatorState(): CalculatorState {
   return {
@@ -155,6 +165,7 @@ export function initialCalculatorState(): CalculatorState {
     registers: {},
     triangle: {},
     triangleInputs: [],
+    triangleUnits: {},
     circle: {},
     velocityCycleIndex: 0,
     history: [],
@@ -208,6 +219,13 @@ function sanitizeStoredValue(value: unknown): CalcValue | undefined {
     system: value.system,
   };
   if (typeof value.angle === 'boolean') sanitized.angle = value.angle;
+  if (
+    value.power === 1 && value.system === 'imperial' &&
+    typeof value.fractionDenominator === 'number' &&
+    FRACTION_RESOLUTIONS.includes(value.fractionDenominator as FractionResolution)
+  ) {
+    sanitized.fractionDenominator = value.fractionDenominator as FractionResolution;
+  }
 
   if (isRecord(value.source)) {
     const sourceUnits = ['ft', 'in', 'm', 'mm'] as const;
@@ -231,11 +249,10 @@ export function sanitizePersistedState(value: unknown): PersistedCalculatorState
   const stored = isRecord(value) ? value : {};
   const rawPreferences = isRecord(stored.preferences) ? stored.preferences : {};
   const preferences: Preferences = { ...DEFAULT_PREFERENCES };
-  const fractionOptions = [2, 4, 8, 16, 32, 64] as const;
   if (
     typeof rawPreferences.fractionDenominator === 'number' &&
-    fractionOptions.includes(rawPreferences.fractionDenominator as typeof fractionOptions[number])
-  ) preferences.fractionDenominator = rawPreferences.fractionDenominator as typeof fractionOptions[number];
+    FRACTION_RESOLUTIONS.includes(rawPreferences.fractionDenominator as FractionResolution)
+  ) preferences.fractionDenominator = rawPreferences.fractionDenominator as FractionResolution;
 
   const numericPreferences = [
     'treadWidth', 'headroom', 'floorThickness', 'desiredRiser', 'onCenter',
@@ -261,32 +278,76 @@ export function sanitizePersistedState(value: unknown): PersistedCalculatorState
   const memory: PersistedCalculatorState['memory'] = {};
   for (const slot of ['m1', 'm2', 'm3'] as const) {
     const sanitized = sanitizeStoredValue(rawMemory[slot]);
-    if (sanitized) memory[slot] = sanitized;
+    if (sanitized && sanitized.amount !== 0) memory[slot] = sanitized;
   }
 
   const result: PersistedCalculatorState = { preferences, memory };
-  if (typeof stored.permanentPitchSlope === 'number' && Number.isFinite(stored.permanentPitchSlope)) {
+  if (typeof stored.permanentPitchSlope === 'number' && Number.isFinite(stored.permanentPitchSlope) && stored.permanentPitchSlope > 0) {
     result.permanentPitchSlope = stored.permanentPitchSlope;
   }
-  if (typeof stored.irregularPitchSlope === 'number' && Number.isFinite(stored.irregularPitchSlope)) {
+  if (typeof stored.irregularPitchSlope === 'number' && Number.isFinite(stored.irregularPitchSlope) && stored.irregularPitchSlope > 0) {
     result.irregularPitchSlope = stored.irregularPitchSlope;
   }
   return result;
 }
 
 function displayFor(value: CalcValue, preferences: Preferences, label = '', note?: string): DisplayState {
-  return { label, ...formatValue(value, preferences), note };
+  const precision = label === 'KPA'
+    ? { scalarMaxDecimals: 8, scalarSignificantDigits: 8 }
+    : undefined;
+  return { label, ...formatValue(value, preferences, precision), note };
+}
+
+function dmsDisplayText(encoded: number): string {
+  const normalized = Number(encoded.toFixed(4));
+  const sign = normalized < 0 ? '−' : '';
+  const [whole, fraction = ''] = Math.abs(normalized).toFixed(4).split('.');
+  return `${sign}${whole}.${fraction.slice(0, 2)}.${fraction.slice(2, 4)}`;
 }
 
 function pendingDisplay(state: CalculatorState): DisplayState {
   if (state.fractionNumerator !== undefined) {
     const denominator = state.entry || String(state.preferences.fractionDenominator);
     const text = `${state.fractionNumerator}/${denominator}`;
-    const prefix = state.composedInches === undefined ? '' : `${formatValue({ amount: state.composedInches, power: 1, unit: 'ft-in', system: 'imperial' }, state.preferences).plainText} + `;
-    return { label: 'ENTRY', valueText: text, unitText: prefix ? 'INCH FRACTION' : '', plainText: `${prefix}${text}` };
+    if (state.composedInches !== undefined && Number(denominator) > 0) {
+      const unit = state.current?.unit === 'in' || state.current?.unit === 'decimal-in'
+        ? 'in'
+        : 'ft-in';
+      const exactFractionPreferences: Preferences = {
+        ...state.preferences,
+        fractionDenominator: Number(denominator) as Preferences['fractionDenominator'],
+        constantFraction: false,
+      };
+      const formatted = formatValue({
+        amount: state.composedInches + state.fractionNumerator / Number(denominator),
+        power: 1,
+        unit,
+        system: 'imperial',
+      }, exactFractionPreferences);
+      return { label: 'ENTRY', ...formatted };
+    }
+    if (state.composedInches !== undefined) {
+      const base = formatValue({
+        amount: state.composedInches,
+        power: 1,
+        unit: state.current?.unit === 'in' || state.current?.unit === 'decimal-in' ? 'in' : 'ft-in',
+        system: 'imperial',
+      }, state.preferences);
+      return {
+        label: 'ENTRY',
+        valueText: `${base.valueText}+${text}`,
+        unitText: base.unitText,
+        plainText: `${base.plainText} + ${text}\u2033`,
+      };
+    }
+    return { label: 'ENTRY', valueText: text, unitText: 'INCH', plainText: `${text}\u2033` };
   }
+  if (!state.entry && state.composedInches !== undefined && state.current) {
+    return { label: 'ENTRY', ...formatValue(state.current, state.preferences) };
+  }
+  const dmsEntry = (state.entry.match(/\./g) ?? []).length >= 2;
   return {
-    label: state.inputKind === 'percent' ? '% ENTRY' : 'ENTRY',
+    label: dmsEntry ? 'DMS' : state.inputKind === 'percent' ? '% ENTRY' : 'ENTRY',
     valueText: state.entry || '0.',
     unitText: state.composedInches === undefined ? '' : 'ADD INCH',
     plainText: state.entry || '0',
@@ -313,8 +374,19 @@ function numericEntry(state: CalculatorState): number | undefined {
   return value;
 }
 
+function enteredFractionResolution(state: CalculatorState): FractionResolution | undefined {
+  if (state.fractionNumerator === undefined) return undefined;
+  const denominator = Number(state.entry || state.preferences.fractionDenominator);
+  return FRACTION_RESOLUTIONS.includes(denominator as FractionResolution)
+    ? denominator as FractionResolution
+    : undefined;
+}
+
 function finalizeInput(state: CalculatorState): { state: CalculatorState; value?: CalcValue } {
   const number = numericEntry(state);
+  const fractionDenominator = enteredFractionResolution(state);
+  const dmsEntry = state.fractionNumerator === undefined
+    && (state.entry.match(/\./g) ?? []).length >= 2;
   const standaloneFraction = state.fractionNumerator !== undefined && state.composedInches === undefined;
   let value = state.current;
   let composed = state.composedInches;
@@ -324,8 +396,11 @@ function finalizeInput(state: CalculatorState): { state: CalculatorState; value?
       composed += number;
       const unit = state.current?.unit === 'in' || state.current?.unit === 'decimal-in' ? 'in' : 'ft-in';
       value = { amount: composed, power: 1, unit, system: 'imperial' };
+      value.fractionDenominator = fractionDenominator;
     } else {
-      value = standaloneFraction ? measurement(number, 'in') : scalar(number);
+      value = dmsEntry
+        ? degrees(convertDms(number, true))
+        : standaloneFraction ? measurement(number, 'in', 1, fractionDenominator) : scalar(number);
     }
   } else if (composed !== undefined) {
     value = state.current?.source && state.current.amount === composed
@@ -338,13 +413,23 @@ function finalizeInput(state: CalculatorState): { state: CalculatorState; value?
         };
   }
 
-  const next = {
+  const next: CalculatorState = {
     ...state,
     entry: '',
     fractionNumerator: undefined,
     composedInches: undefined,
     current: value,
     inputActive: Boolean(value && state.inputActive),
+    inputKind: dmsEntry ? 'dms' : state.inputKind,
+    angleDisplayMode: dmsEntry ? 'dms' : state.angleDisplayMode,
+    display: dmsEntry && value
+      ? {
+          label: 'DMS',
+          valueText: dmsDisplayText(convertDms(value.amount, false)),
+          unitText: '',
+          plainText: dmsDisplayText(convertDms(value.amount, false)),
+        }
+      : state.display,
   };
   return { state: next, value };
 }
@@ -357,12 +442,7 @@ function finalizeExponent(
   const exponent = finalized.value?.amount;
   if (exponent === undefined || finalized.value?.power !== 0 || finalized.value.angle) throw new CalcError('EXP Error');
   if (!Number.isInteger(exponent) || Math.abs(exponent) > 99) throw new CalcError('EXP Error');
-  const value: CalcValue = {
-    amount: base.amount * 10 ** exponent,
-    power: base.power,
-    unit: base.unit,
-    system: base.system,
-  };
+  const value = operate(base, '*', scalar(10 ** exponent));
   return {
     state: { ...finalized.state, exponentBase: undefined, current: value, inputActive: true },
     value,
@@ -370,7 +450,7 @@ function finalizeExponent(
 }
 
 function requireInput(state: CalculatorState): { state: CalculatorState; value: CalcValue } {
-  const finalized = finalizeInput(state);
+  const finalized = finalizeExponent(finalizeInput(state));
   if (!finalized.value) throw new CalcError('ENT Error');
   return finalized as { state: CalculatorState; value: CalcValue };
 }
@@ -387,12 +467,33 @@ function pushHistory(state: CalculatorState, display: DisplayState): CalculatorS
 
 function showValue(state: CalculatorState, value: CalcValue, label = '', note?: string): CalculatorState {
   const display = displayFor(value, state.preferences, label, note);
+  return pushHistory({
+    ...state,
+    entry: '',
+    fractionNumerator: undefined,
+    composedInches: undefined,
+    exponentBase: undefined,
+    current: cloneValue(value),
+    display,
+    inputActive: false,
+  }, display);
+}
+
+function showEnteredArcAngle(state: CalculatorState, value: CalcValue): CalculatorState {
+  const rounded = value.amount.toFixed(2);
+  const text = Number(rounded) === 0 ? '0.00' : rounded.replace('-', '−');
+  const display: DisplayState = {
+    label: 'ARC',
+    valueText: text,
+    unitText: 'DEG',
+    plainText: `${text}°`,
+  };
   return pushHistory({ ...state, current: cloneValue(value), display, inputActive: false }, display);
 }
 
-function showDmsValue(state: CalculatorState, value: CalcValue, label = 'D:M:S'): CalculatorState {
+function showDmsValue(state: CalculatorState, value: CalcValue, label = 'DMS'): CalculatorState {
   const encoded = convertDms(value.amount, false);
-  const dmsText = encoded.toFixed(4);
+  const dmsText = dmsDisplayText(encoded);
   const display = {
     ...formatValue(scalar(encoded), state.preferences),
     label,
@@ -458,17 +559,26 @@ function advanceSequence(state: CalculatorState): CalculatorState {
   );
 }
 
-function addDigit(state: CalculatorState, digit: string): CalculatorState {
+function prepareNumericEntry(state: CalculatorState): CalculatorState {
   let next = clearSequence(state);
-  if (!next.inputActive && (next.current || next.expression.length === 0)) {
+  const startsFreshValue = !next.entry
+    && next.fractionNumerator === undefined
+    && next.composedInches === undefined
+    && next.exponentBase === undefined;
+  if (startsFreshValue) {
     next = {
       ...next,
       current: undefined,
       inputKind: undefined,
-      angleDisplayMode: undefined,
+      angleDisplayMode: next.expression.length ? next.angleDisplayMode : undefined,
       expression: next.lastKey === 'equals' ? [] : next.expression,
     };
   }
+  return next;
+}
+
+function addDigit(state: CalculatorState, digit: string): CalculatorState {
+  const next = prepareNumericEntry(state);
   const entry = next.entry === '0' && digit !== '0' && next.fractionNumerator === undefined
     ? digit
     : `${next.entry}${digit}`.slice(0, 12);
@@ -478,11 +588,7 @@ function addDigit(state: CalculatorState, digit: string): CalculatorState {
 
 function addDecimal(state: CalculatorState): CalculatorState {
   if (state.fractionNumerator !== undefined) throw new CalcError('ENT Error');
-  let next = clearSequence(state);
-  if (!next.entry && next.expression.length === 0) {
-    next = { ...next, angleDisplayMode: undefined };
-  }
-  if (!next.inputActive) next = { ...next, current: undefined, inputKind: undefined };
+  let next = prepareNumericEntry(state);
   const separators = (next.entry.match(/\./g) ?? []).length;
   if (separators >= 2 || next.entry.endsWith('.')) return next;
   next = { ...next, entry: next.entry ? `${next.entry}.` : '0.', inputActive: true, modifier: undefined };
@@ -511,6 +617,29 @@ function linearResultUnit(value: CalcValue): CalculatorState['resultUnit'] {
   if (value.unit === 'm' || value.unit === 'sq-m' || value.unit === 'cu-m') return 'm';
   if (value.unit === 'mm' || value.unit === 'sq-mm' || value.unit === 'cu-mm') return 'mm';
   return undefined;
+}
+
+function combinedLinearResultUnit(units: Array<LinearResultUnit | undefined>): LinearResultUnit | undefined {
+  const defined = units.filter((unit): unit is LinearResultUnit => unit !== undefined);
+  if (!defined.length) return undefined;
+  if (defined.every((unit) => unit === defined[0])) return defined[0];
+  const metric = (unit: LinearResultUnit) => unit === 'm' || unit === 'mm';
+  if (defined.every(metric)) return 'm';
+  return 'ft-in';
+}
+
+function resultUnitForValues(values: CalcValue[]): LinearResultUnit | undefined {
+  return combinedLinearResultUnit(values.map(linearResultUnit));
+}
+
+function forceResultUnit(value: CalcValue, unit: LinearResultUnit | undefined): CalcValue {
+  if (!unit || value.angle || value.power < 1 || value.power > 3) return value;
+  const baseUnit = unit === 'ft-in' ? 'ft' : unit;
+  return withUnit(value, unitHintFor(baseUnit, value.power));
+}
+
+function resultsInUnit(results: NamedResult[], unit: LinearResultUnit | undefined): NamedResult[] {
+  return results.map((result) => ({ ...result, value: forceResultUnit(result.value, unit) }));
 }
 
 function contextualValue(state: CalculatorState, value: CalcValue): CalcValue {
@@ -554,6 +683,18 @@ function contextualResults(state: CalculatorState, results: NamedResult[]): Name
 }
 
 function enterUnit(state: CalculatorState, unit: 'ft' | 'in' | 'm' | 'mm'): CalculatorState {
+  if (state.exponentBase) {
+    const finalized = finalizeExponent(finalizeInput(state));
+    if (!finalized.value || finalized.value.angle) throw new CalcError('TYP Error');
+    const value = finalized.value.power === 0
+      ? measurement(finalized.value.amount, unit)
+      : withUnit(finalized.value, unitHintFor(unit, finalized.value.power));
+    const shown = showValue(finalized.state, value, unit.toUpperCase());
+    return { ...shown, inputActive: true };
+  }
+  if ((state.entry.match(/\./g) ?? []).length >= 2) {
+    throw new CalcError('TYP Error');
+  }
   const number = numericEntry(state);
   if (number === undefined) {
     const source = state.current?.source;
@@ -591,6 +732,7 @@ function enterUnit(state: CalculatorState, unit: 'ft' | 'in' | 'm' | 'mm'): Calc
   }
 
   if (unit === 'ft' || unit === 'in') {
+    const fractionDenominator = enteredFractionResolution(state);
     const composed = (state.composedInches ?? 0) + number * (unit === 'ft' ? 12 : 1);
     const hasFeet = unit === 'ft'
       || state.current?.unit === 'ft-in'
@@ -600,6 +742,7 @@ function enterUnit(state: CalculatorState, unit: 'ft' | 'in' | 'm' | 'mm'): Calc
       power: 1,
       unit: hasFeet ? 'decimal-ft' : 'decimal-in',
       system: 'imperial',
+      fractionDenominator,
       source: state.composedInches === undefined ? { amount: number, unit, power: 1 } : undefined,
     };
     if (state.composedInches !== undefined) value.unit = hasFeet ? 'ft-in' : 'in';
@@ -617,6 +760,31 @@ function enterUnit(state: CalculatorState, unit: 'ft' | 'in' | 'm' | 'mm'): Calc
   }
 
   const value = measurement(number, unit);
+  if (
+    unit === 'm' &&
+    state.fractionNumerator === undefined &&
+    state.composedInches === undefined &&
+    Math.abs(number) <= DISPLAY_MAX
+  ) {
+    const rawText = state.entry || String(number);
+    const valueText = rawText.replace('-', '−');
+    const display: DisplayState = {
+      label: 'M',
+      valueText,
+      unitText: 'M',
+      plainText: `${valueText} m`,
+    };
+    return pushHistory({
+      ...state,
+      entry: '',
+      fractionNumerator: undefined,
+      composedInches: undefined,
+      current: value,
+      inputActive: true,
+      modifier: undefined,
+      display,
+    }, display);
+  }
   const shown = showValue(
     { ...state, entry: '', fractionNumerator: undefined, composedInches: undefined, inputActive: true },
     value,
@@ -634,6 +802,19 @@ function commitOperator(state: CalculatorState, operator: Operator): CalculatorS
   if (!tokens.length) throw new CalcError('ENT Error');
   if (tokens.at(-1)?.type === 'operator') tokens[tokens.length - 1] = { type: 'operator', operator };
   else tokens.push({ type: 'operator', operator });
+  let display: DisplayState = { ...finalized.state.display, label: operator };
+  const completedPrefix = tokens.slice(0, -1);
+  if (finalized.state.parenthesisDepth === 0 && completedPrefix.at(-1)?.type === 'value') {
+    try {
+      const preview = evaluateExpression(completedPrefix, finalized.state.preferences.mathMode);
+      display = displayFor(preview, finalized.state.preferences, operator);
+    } catch (error) {
+      // A higher-precedence operand can make an otherwise incompatible prefix valid,
+      // for example: 1 Feet + 2 × 3 Feet. Keep accepting the expression and let
+      // Equals validate the completed token stream.
+      if (!(error instanceof CalcError)) throw error;
+    }
+  }
   return {
     ...finalized.state,
     expression: tokens,
@@ -641,7 +822,7 @@ function commitOperator(state: CalculatorState, operator: Operator): CalculatorS
     inputActive: false,
     inputKind: undefined,
     sequence: undefined,
-    display: { ...finalized.state.display, label: operator },
+    display,
   };
 }
 
@@ -701,7 +882,13 @@ function trig(state: CalculatorState, mode: 'sin' | 'cos' | 'tan' | 'asin' | 'ac
     acos: () => Math.acos(numeric) * 180 / Math.PI,
     atan: () => Math.atan(numeric) * 180 / Math.PI,
   };
-  const value = inverse ? degrees(functions[mode]()) : scalar(functions[mode]());
+  const rawResult = functions[mode]();
+  const normalizedResult = !inverse && Math.abs(rawResult) < 1e-12
+    ? 0
+    : !inverse && Math.abs(Math.abs(rawResult) - 1) < 1e-12
+      ? Math.sign(rawResult)
+      : rawResult;
+  const value = inverse ? degrees(normalizedResult) : scalar(normalizedResult);
   return { ...showValue(input.state, value, mode.toUpperCase()), inputActive: true };
 }
 
@@ -709,13 +896,17 @@ function recordTriangleInput(
   state: CalculatorState,
   key: keyof TriangleValues,
   value: number,
-): Pick<CalculatorState, 'triangle' | 'triangleInputs'> {
+  unit?: LinearResultUnit,
+): Pick<CalculatorState, 'triangle' | 'triangleInputs' | 'triangleUnits'> {
   const triangleInputs = [...state.triangleInputs.filter((input) => input !== key), key].slice(-2);
   const triangle: TriangleValues = {};
+  const triangleUnits: CalculatorState['triangleUnits'] = {};
 
   for (const input of triangleInputs) {
     const stored = input === key ? value : state.triangle[input];
     if (stored !== undefined) triangle[input] = stored;
+    const storedUnit = input === key ? unit : state.triangleUnits[input];
+    if (storedUnit !== undefined) triangleUnits[input] = storedUnit;
   }
 
   if (
@@ -726,7 +917,7 @@ function recordTriangleInput(
     triangle.theta = Math.atan(state.permanentPitchSlope) * 180 / Math.PI;
   }
 
-  return { triangle, triangleInputs };
+  return { triangle, triangleInputs, triangleUnits };
 }
 
 function triangleForSolve(state: CalculatorState): TriangleValues {
@@ -749,27 +940,43 @@ function enterTriangle(state: CalculatorState, key: 'x' | 'y' | 'r'): Calculator
   if (state.inputActive) {
     const input = requireInput(state);
     const value = input.value;
+    if (value.angle) throw new CalcError('TYP Error');
     if (value.power !== 0 && value.power !== 1) throw new CalcError('DIM Error');
     const unitless = value.power === 0;
     const hasStoredSide = state.triangleInputs.some((entry) => entry === 'x' || entry === 'y' || entry === 'r');
-    const switchesDimensionMode = hasStoredSide &&
+    const switchesDimensionMode = (
+      hasStoredSide &&
       state.triangleUnitless !== undefined &&
-      state.triangleUnitless !== unitless;
+      state.triangleUnitless !== unitless
+    ) || (unitless && state.circleResultUnit !== undefined);
     const geometryState = switchesDimensionMode
-      ? { ...state, triangle: {}, triangleInputs: [], circle: {} }
+      ? {
+          ...state,
+          triangle: {},
+          triangleInputs: [],
+          triangleUnits: {},
+          circle: {},
+          circleResultUnit: undefined,
+          circleRadiusUnit: undefined,
+        }
       : state;
-    const recorded = recordTriangleInput(geometryState, key, value.amount);
+    const enteredUnit = unitless ? undefined : linearResultUnit(value);
+    const recorded = recordTriangleInput(geometryState, key, value.amount, enteredUnit);
     const circle = key === 'x'
       ? { ...geometryState.circle, chord: value.amount }
       : key === 'y'
         ? { ...geometryState.circle, rise: value.amount, height: value.amount }
         : geometryState.circle;
+    const circleResultUnit = key === 'x' || key === 'y'
+      ? enteredUnit ?? geometryState.circleResultUnit
+      : geometryState.circleResultUnit;
     return showValue(
       {
         ...input.state,
         ...recorded,
         circle,
-        resultUnit: unitless ? undefined : linearResultUnit(value) ?? state.resultUnit,
+        circleResultUnit,
+        resultUnit: unitless ? undefined : enteredUnit,
         triangleUnitless: unitless,
       },
       value,
@@ -779,13 +986,15 @@ function enterTriangle(state: CalculatorState, key: 'x' | 'y' | 'r'): Calculator
 
   if (state.circle.radius && key === 'x' && (state.circle.rise ?? state.triangle.y) !== undefined) {
     const chord = segmentChord(state.circle.radius, state.circle.rise ?? state.triangle.y!);
-    const value = contextualValue(state, { amount: chord, power: 1, unit: 'ft-in', system: 'imperial' });
-    return showValue({ ...state, circle: { ...state.circle, chord }, triangle: { ...state.triangle, x: chord } }, value, 'CHORD');
+    const context = { ...state, resultUnit: state.circleResultUnit ?? state.resultUnit };
+    const value = contextualValue(context, { amount: chord, power: 1, unit: 'ft-in', system: 'imperial' });
+    return showValue({ ...state, circle: { ...state.circle, chord }, triangle: { ...state.triangle, x: chord } }, value, 'CORD');
   }
   if (state.circle.radius && key === 'y' && (state.circle.chord ?? state.triangle.x) !== undefined) {
     const rise = segmentRise(state.circle.radius, state.circle.chord ?? state.triangle.x!);
-    const value = contextualValue(state, { amount: rise, power: 1, unit: 'ft-in', system: 'imperial' });
-    return showValue({ ...state, circle: { ...state.circle, rise }, triangle: { ...state.triangle, y: rise } }, value, 'SEG RISE');
+    const context = { ...state, resultUnit: state.circleResultUnit ?? state.resultUnit };
+    const value = contextualValue(context, { amount: rise, power: 1, unit: 'ft-in', system: 'imperial' });
+    return showValue({ ...state, circle: { ...state.circle, rise }, triangle: { ...state.triangle, y: rise } }, value, 'RISE');
   }
 
   const solved = solveRightTriangle(triangleForSolve(state));
@@ -810,13 +1019,18 @@ function enterPitch(state: CalculatorState): CalculatorState {
     let slope: number;
     let startIndex: number;
     if (input.value.power === 1) {
+      if (!Number.isFinite(input.value.amount) || input.value.amount <= 0) throw new CalcError('ENT Error');
       slope = input.value.amount / 12;
       startIndex = 0;
     } else if (input.value.power === 0) {
       if (state.inputKind === 'percent') {
+        if (!Number.isFinite(input.value.amount) || input.value.amount <= 0) throw new CalcError('ENT Error');
         slope = input.value.amount / 100;
         startIndex = 2;
       } else {
+        if (!Number.isFinite(input.value.amount) || input.value.amount <= 0 || input.value.amount >= 90) {
+          throw new CalcError('ENT Error');
+        }
         slope = Math.tan(input.value.amount * Math.PI / 180);
         startIndex = 1;
       }
@@ -864,6 +1078,11 @@ function sharedRegister(state: CalculatorState, key: keyof SharedRegisters, labe
 }
 
 function fanLaw(state: CalculatorState, law: 1 | 2 | 3): CalculatorState {
+  const storedValues = (['a', 'aNew', 'b', 'bNew'] as const)
+    .map((key) => state.registers[key])
+    .filter((value): value is CalcValue => value !== undefined);
+  if (storedValues.some((value) => value.angle)) throw new CalcError('TYP Error');
+  if (storedValues.some((value) => value.power !== 0)) throw new CalcError('DIM Error');
   const values = Object.fromEntries(
     (['a', 'aNew', 'b', 'bNew'] as const).map((key) => [key, state.registers[key]?.amount]),
   );
@@ -883,6 +1102,8 @@ function offset(state: CalculatorState): CalculatorState {
   const { x, y } = state.triangle;
   const a = state.registers.a;
   if (x === undefined || y === undefined || !a) throw new CalcError('ENT Error');
+  if (a.angle) throw new CalcError('TYP Error');
+  if (state.triangleUnitless && a.power !== 0) throw new CalcError('DIM Error');
   let fittingHeight: number;
   if (a.power === 1) fittingHeight = a.amount;
   else if (a.power === 0 && state.triangleUnitless === true) fittingHeight = a.amount;
@@ -898,8 +1119,19 @@ function offset(state: CalculatorState): CalculatorState {
 
 function lawCos(state: CalculatorState): CalculatorState {
   const { a, b, c } = state.registers;
-  if (!a || !b || !c || [a, b, c].some((value) => value.power !== 1)) throw new CalcError('ENT Error');
-  return setSequence(state, 'lawcos', contextualResults(state, lawOfCosines(a.amount, b.amount, c.amount)), '9');
+  if (!a || !b || !c) throw new CalcError('ENT Error');
+  if (a.angle || b.angle || c.angle) throw new CalcError('TYP Error');
+  const powers = new Set([a.power, b.power, c.power]);
+  if (powers.size !== 1 || (a.power !== 0 && a.power !== 1)) throw new CalcError('DIM Error');
+  const results = lawOfCosines(a.amount, b.amount, c.amount);
+  const resultUnit = a.power === 1 ? resultUnitForValues([a, b, c]) : undefined;
+  const displayResults = a.power === 0
+    ? results.map((result) => ({
+        ...result,
+        value: result.value.angle ? result.value : scalar(result.value.amount),
+      }))
+    : resultsInUnit(results, resultUnit);
+  return setSequence({ ...state, resultUnit }, 'lawcos', displayResults, '9');
 }
 
 function circle(state: CalculatorState): CalculatorState {
@@ -907,11 +1139,25 @@ function circle(state: CalculatorState): CalculatorState {
   if (state.inputActive) {
     const input = requireInput(state);
     if (input.value.power !== 1) throw new CalcError('DIM Error');
-    const values = { ...state.circle, diameter: input.value.amount, radius: input.value.amount / 2 };
-    const next = { ...input.state, circle: values, resultUnit: linearResultUnit(input.value) ?? state.resultUnit };
+    const enteredUnit = linearResultUnit(input.value);
+    const retainedHeight = state.triangleUnitless ? undefined : state.circle.height;
+    const values = {
+      diameter: input.value.amount,
+      radius: input.value.amount / 2,
+      height: retainedHeight,
+    };
+    const circleResultUnit = enteredUnit;
+    const next = {
+      ...input.state,
+      circle: values,
+      circleResultUnit,
+      circleRadiusUnit: enteredUnit,
+      resultUnit: circleResultUnit,
+    };
     return setSequence(next, 'circle', contextualResults(next, circleResults(values)), 'circ');
   }
-  return setSequence(state, 'circle', contextualResults(state, circleResults(state.circle)), 'circ');
+  const next = { ...state, resultUnit: state.circleResultUnit ?? state.resultUnit };
+  return setSequence(next, 'circle', contextualResults(next, circleResults(state.circle)), 'circ');
 }
 
 function enterArc(state: CalculatorState): CalculatorState {
@@ -933,7 +1179,11 @@ function enterArc(state: CalculatorState): CalculatorState {
     }
     if (theta === undefined || !Number.isFinite(theta) || theta <= 0) throw new CalcError('ENT Error');
     Object.assign(circleValues, { radius, diameter: radius * 2, chord, rise, arcDegrees: theta, arcLength: undefined });
-    const next = { ...state, circle: circleValues };
+    const next = {
+      ...state,
+      circle: circleValues,
+      resultUnit: state.circleResultUnit ?? state.resultUnit,
+    };
     const results = contextualResults(next, arcResults(circleValues, state.preferences.onCenter));
     const sequence = { id: 'arc', results, index: -1, trigger: 'circ' as KeyId };
     const shown = showValue({ ...next, sequence }, degrees(theta), 'ARC');
@@ -956,20 +1206,43 @@ function enterArc(state: CalculatorState): CalculatorState {
   const next = {
     ...input.state,
     circle: circleValues,
-    resultUnit: input.value.power === 1 ? linearResultUnit(input.value) ?? state.resultUnit : state.resultUnit,
+    circleResultUnit: input.value.power === 1
+      ? linearResultUnit(input.value) ?? state.circleResultUnit
+      : state.circleResultUnit,
   };
+  next.resultUnit = next.circleResultUnit ?? state.resultUnit;
   const results = contextualResults(next, arcResults(circleValues, state.preferences.onCenter));
-  const shown = showValue({ ...next, sequence: { id: 'arc', results, index: -1, trigger: 'circ' } }, entered.value, entered.label);
-  return { ...shown, sequence: { id: 'arc', results, index: -1, trigger: 'circ' } };
+  const sequence = { id: 'arc', results, index: -1, trigger: 'circ' as KeyId };
+  const sequenceState = { ...next, sequence };
+  const shown = input.value.power === 0
+    ? showEnteredArcAngle(sequenceState, entered.value)
+    : showValue(sequenceState, entered.value, entered.label);
+  return { ...shown, sequence };
 }
 
 function segRadius(state: CalculatorState): CalculatorState {
   if (state.inputActive) {
     const input = requireInput(state);
     if (input.value.power !== 1) throw new CalcError('DIM Error');
-    const circleValues = { ...state.circle, radius: input.value.amount, diameter: input.value.amount * 2 };
+    const switchesDimensionMode = state.triangleUnitless === true;
+    const circleValues = {
+      ...(switchesDimensionMode ? {} : state.circle),
+      radius: input.value.amount,
+      diameter: input.value.amount * 2,
+    };
+    const circleResultUnit = linearResultUnit(input.value);
     return showValue(
-      { ...input.state, circle: circleValues, resultUnit: linearResultUnit(input.value) ?? state.resultUnit },
+      {
+        ...input.state,
+        circle: circleValues,
+        circleResultUnit,
+        circleRadiusUnit: circleResultUnit,
+        resultUnit: circleResultUnit,
+        triangle: switchesDimensionMode ? {} : state.triangle,
+        triangleInputs: switchesDimensionMode ? [] : state.triangleInputs,
+        triangleUnits: switchesDimensionMode ? {} : state.triangleUnits,
+        triangleUnitless: switchesDimensionMode ? undefined : state.triangleUnitless,
+      },
       input.value,
       'RAD',
     );
@@ -977,12 +1250,26 @@ function segRadius(state: CalculatorState): CalculatorState {
   const chord = state.circle.chord ?? state.triangle.x;
   const rise = state.circle.rise ?? state.triangle.y;
   let radius = state.circle.radius;
-  if (radius === undefined && chord !== undefined && rise !== undefined) radius = segmentRadius(chord, rise);
+  const freshChordAndRise = state.triangleInputs.includes('x') && state.triangleInputs.includes('y');
+  if ((radius === undefined || freshChordAndRise) && chord !== undefined && rise !== undefined) {
+    radius = segmentRadius(chord, rise);
+  }
   if (!radius) throw new CalcError('ENT Error');
   const circleValues = { ...state.circle, radius, diameter: radius * 2, chord, rise };
+  const latestTriangleInput = state.triangleInputs.at(-1);
+  const circleResultUnit = latestTriangleInput === undefined
+    ? state.circleResultUnit ?? state.resultUnit
+    : state.triangleUnits[latestTriangleInput] ?? state.circleResultUnit ?? state.resultUnit;
+  const next = {
+    ...state,
+    circle: circleValues,
+    circleResultUnit,
+    circleRadiusUnit: circleResultUnit,
+    resultUnit: circleResultUnit,
+  };
   return showValue(
-    { ...state, circle: circleValues },
-    contextualValue(state, { amount: radius, power: 1, unit: 'ft-in', system: 'imperial' }),
+    next,
+    contextualValue(next, { amount: radius, power: 1, unit: 'ft-in', system: 'imperial' }),
     'RAD',
   );
 }
@@ -993,16 +1280,24 @@ function hip(state: CalculatorState): CalculatorState {
   if (!run) throw new CalcError('ENT Error');
   const solved = solveRightTriangle(triangleForSolve(state));
   const slope = solved.y / solved.x;
-  return setSequence(state, 'hip', contextualResults(state, hipValleyResults(run, slope, state.irregularPitchSlope)), 'hip');
+  return setSequence(state, 'hip', contextualOrUnitlessResults(state, hipValleyResults(run, slope, state.irregularPitchSlope)), 'hip');
 }
 
 function irregularPitch(state: CalculatorState): CalculatorState {
   const input = requireInput(state);
   let slope: number;
-  if (input.value.power === 1) slope = input.value.amount / 12;
-  else if (input.value.power === 0) slope = state.inputKind === 'percent'
-    ? input.value.amount / 100
-    : Math.tan(input.value.amount * Math.PI / 180);
+  if (input.value.power === 1) {
+    if (!Number.isFinite(input.value.amount) || input.value.amount <= 0) throw new CalcError('ENT Error');
+    slope = input.value.amount / 12;
+  } else if (input.value.power === 0 && state.inputKind === 'percent') {
+    if (!Number.isFinite(input.value.amount) || input.value.amount <= 0) throw new CalcError('ENT Error');
+    slope = input.value.amount / 100;
+  } else if (input.value.power === 0) {
+    if (!Number.isFinite(input.value.amount) || input.value.amount <= 0 || input.value.amount >= 90) {
+      throw new CalcError('ENT Error');
+    }
+    slope = Math.tan(input.value.amount * Math.PI / 180);
+  }
   else throw new CalcError('DIM Error');
   return showValue(
     { ...input.state, irregularPitchSlope: slope, inputKind: undefined },
@@ -1020,6 +1315,7 @@ function jacks(state: CalculatorState, irregularFirst: boolean): CalculatorState
     const preferences = { ...state.preferences, onCenter: input.value.amount };
     return showValue({ ...input.state, preferences }, input.value, 'JKOC STORED');
   }
+  if (state.triangleUnitless) throw new CalcError('DIM Error');
   const run = state.triangle.x;
   if (!run) throw new CalcError('ENT Error');
   const solved = solveRightTriangle(triangleForSolve(state));
@@ -1030,6 +1326,7 @@ function jacks(state: CalculatorState, irregularFirst: boolean): CalculatorState
 
 function stairs(state: CalculatorState): CalculatorState {
   if (state.sequence?.id === 'stairs') return advanceSequence(state);
+  if (state.triangleUnitless) throw new CalcError('DIM Error');
   return setSequence(state, 'stairs', contextualResults(state, stairResults(state.triangle.y, state.triangle.x, state.preferences)), 'stair');
 }
 
@@ -1042,24 +1339,54 @@ function storeRiser(state: CalculatorState): CalculatorState {
 
 function columnCone(state: CalculatorState): CalculatorState {
   if (state.sequence?.id === 'column-cone') return advanceSequence(state);
+  if (state.triangleUnitless && state.triangle.y !== undefined) throw new CalcError('DIM Error');
   const radius = state.circle.radius ?? (state.circle.diameter === undefined ? undefined : state.circle.diameter / 2);
   const height = state.circle.height ?? state.triangle.y;
   if (!radius || !height) throw new CalcError('ENT Error');
-  return setSequence(state, 'column-cone', contextualResults(state, columnConeResults(radius, height)), 'right');
+  const resultUnit = combinedLinearResultUnit([
+    state.circleRadiusUnit ?? state.circleResultUnit,
+    state.triangleUnits.y,
+  ]) ?? state.resultUnit;
+  return setSequence(
+    { ...state, resultUnit },
+    'column-cone',
+    resultsInUnit(columnConeResults(radius, height), resultUnit),
+    'right',
+  );
 }
 
 function memoryStore(state: CalculatorState, slot: 'm1' | 'm2' | 'm3'): CalculatorState {
   const input = requireInput(state);
-  return showValue({ ...input.state, memory: { ...state.memory, [slot]: cloneValue(input.value) } }, input.value, slot.toUpperCase());
+  const memory = { ...state.memory };
+  if (input.value.amount === 0) delete memory[slot];
+  else memory[slot] = cloneValue(input.value);
+  return showValue({ ...input.state, memory }, input.value, `M-${slot.slice(1)}`);
+}
+
+function showRecalledValue(
+  state: CalculatorState,
+  value: CalcValue,
+  label: string,
+  inputActive = true,
+): CalculatorState {
+  const exponentBase = state.exponentBase;
+  const shown = showValue(
+    { ...state, modifier: undefined, inputKind: 'recalled', angleDisplayMode: undefined },
+    value,
+    label,
+  );
+  return {
+    ...shown,
+    exponentBase,
+    inputActive: inputActive || exponentBase !== undefined,
+    inputKind: inputActive || exponentBase !== undefined ? 'recalled' : undefined,
+  };
 }
 
 function memoryRecall(state: CalculatorState, slot: keyof MemoryState): CalculatorState {
   const value = state.memory[slot] ?? scalar(0);
-  return {
-    ...showValue({ ...state, modifier: undefined, inputKind: 'recalled', angleDisplayMode: undefined }, value, slot.toUpperCase()),
-    inputActive: true,
-    inputKind: 'recalled',
-  };
+  const label = slot === 'cumulative' ? 'M+' : `M-${slot.slice(1)}`;
+  return showRecalledValue(state, value, label);
 }
 
 function negateValue(value: CalcValue): CalcValue {
@@ -1107,6 +1434,7 @@ function percent(state: CalculatorState): CalculatorState {
 function velocity(state: CalculatorState): CalculatorState {
   if (state.sequence?.id === 'velocity') return advanceSequence(state);
   const input = requireInput(state);
+  if (input.value.angle) throw new CalcError('TYP Error');
   if (input.value.power !== 0) throw new CalcError('DIM Error');
   const results = velocityPressureResults(input.value.amount);
   const initialIndex = state.velocityCycleIndex % results.length;
@@ -1160,6 +1488,19 @@ function convertCurrentUnit(state: CalculatorState, unit: 'feet' | 'inch' | 'met
   return { ...showValue(input.state, withUnit(input.value, hint), 'CONV'), inputActive: true };
 }
 
+function convertMetricKey(state: CalculatorState): CalculatorState {
+  const input = requireInput(state);
+  if (input.value.angle) throw new CalcError('TYP Error');
+  if (input.value.power === 0) {
+    const entered = measurement(input.value.amount, 'mm');
+    return { ...showValue(input.state, entered, 'MM'), inputActive: true };
+  }
+  const meterUnits: CalcValue['unit'][] = ['m', 'sq-m', 'cu-m'];
+  const target = meterUnits.includes(input.value.unit) ? 'mm' : 'm';
+  const value = withUnit(input.value, unitHintFor(target, input.value.power));
+  return { ...showValue(input.state, value, 'CONV'), inputActive: true };
+}
+
 function reciprocal(state: CalculatorState): CalculatorState {
   const input = requireInput(state);
   if (input.value.amount === 0) throw new CalcError('DIV Error');
@@ -1168,6 +1509,13 @@ function reciprocal(state: CalculatorState): CalculatorState {
 }
 
 function changeSign(state: CalculatorState): CalculatorState {
+  if (state.exponentBase && state.current) {
+    return showRecalledValue(state, negateValue(state.current), '+/−');
+  }
+  if (state.fractionNumerator !== undefined || state.composedInches !== undefined) {
+    const input = requireInput(state);
+    return { ...showValue(input.state, negateValue(input.value), '+/−'), inputActive: true };
+  }
   if (state.entry) {
     const entry = state.entry.startsWith('-') ? state.entry.slice(1) : `-${state.entry}`;
     const next = { ...state, entry };
@@ -1298,17 +1646,18 @@ function adjustPreference(state: CalculatorState, direction: 1 | -1): Calculator
 
 function recallSharedRegister(state: CalculatorState, key: keyof SharedRegisters, label: string): CalculatorState {
   const value = state.registers[key] ?? scalar(0);
-  return {
-    ...showValue({ ...state, modifier: undefined, inputKind: 'recalled', angleDisplayMode: undefined }, value, `${label} STORED`),
-    inputActive: true,
-    inputKind: 'recalled',
-  };
+  return showRecalledValue(state, value, `${label} STORED`);
 }
 
 function handleRecall(state: CalculatorState, key: KeyId): CalculatorState {
   if (key === 'recall') {
     const value = state.memory.cumulative ?? scalar(0);
-    return showValue({ ...state, memory: { ...state.memory, cumulative: undefined }, modifier: undefined, inputKind: undefined, angleDisplayMode: undefined }, value, 'M+ CLR');
+    return showRecalledValue(
+      { ...state, memory: { ...state.memory, cumulative: undefined } },
+      value,
+      'M+',
+      false,
+    );
   }
   if (key === 'mplus') return memoryRecall({ ...state, modifier: undefined }, 'cumulative');
   if (key === '1' || key === '2' || key === '3') return memoryRecall({ ...state, modifier: undefined }, `m${key}` as 'm1' | 'm2' | 'm3');
@@ -1318,45 +1667,39 @@ function handleRecall(state: CalculatorState, key: KeyId): CalculatorState {
   if (key === '7') return recallSharedRegister(state, 'aNew', 'An');
   if (key === '8') return recallSharedRegister(state, 'bNew', 'Bn');
   if (key === 'fraction') {
-    return {
-      ...showValue(
-        { ...state, modifier: undefined, inputKind: 'recalled', angleDisplayMode: undefined },
-        { amount: 1 / state.preferences.fractionDenominator, power: 1, unit: 'in', system: 'imperial' },
-        state.preferences.constantFraction ? 'CONST' : 'STD',
-      ),
-      inputActive: true,
-      inputKind: 'recalled',
-    };
+    return showRecalledValue(
+      state,
+      { amount: 1 / state.preferences.fractionDenominator, power: 1, unit: 'in', system: 'imperial' },
+      state.preferences.constantFraction ? 'CONST' : 'STD',
+    );
   }
   if (key === 'equals') return showPreference(state, 0, 'review');
-  if (key === 'jack') return showValue({ ...state, modifier: undefined, inputKind: undefined, angleDisplayMode: undefined }, { amount: state.preferences.onCenter, power: 1, unit: 'in', system: 'imperial' }, 'JKOC');
+  if (key === 'jack') {
+    return showRecalledValue(
+      state,
+      { amount: state.preferences.onCenter, power: 1, unit: 'in', system: 'imperial' },
+      'JKOC',
+    );
+  }
   if (key === 'pitch') {
     if (state.permanentPitchSlope === undefined) throw new CalcError('ENT Error');
-    return {
-      ...showValue(
-      { ...state, modifier: undefined, inputKind: 'recalled', angleDisplayMode: undefined },
+    return showRecalledValue(
+      state,
       { amount: state.permanentPitchSlope * 12, power: 1, unit: 'in', system: 'imperial' },
       'PTCH STORED',
-      ),
-      inputActive: true,
-      inputKind: 'recalled',
-    };
+    );
   }
   if (key === 'hip') {
     if (state.irregularPitchSlope === undefined) throw new CalcError('ENT Error');
-    return {
-      ...showValue(
-      { ...state, modifier: undefined, inputKind: 'recalled', angleDisplayMode: undefined },
+    return showRecalledValue(
+      state,
       { amount: state.irregularPitchSlope * 12, power: 1, unit: 'in', system: 'imperial' },
       'IPCH STORED',
-      ),
-      inputActive: true,
-      inputKind: 'recalled',
-    };
+    );
   }
   if (key === 'stair') {
-    return showValue(
-      { ...state, modifier: undefined, sequence: undefined, inputKind: undefined, angleDisplayMode: undefined },
+    return showRecalledValue(
+      { ...state, sequence: undefined },
       { amount: state.preferences.desiredRiser, power: 1, unit: 'in', system: 'imperial' },
       'R-HT STORED',
     );
@@ -1382,7 +1725,7 @@ function handleSecondary(state: CalculatorState, key: KeyId): CalculatorState {
     case 'tan': return trig(next, 'atan');
     case 'left': return offset(next);
     case 'right': return columnCone(next);
-    case 'meter': return convertCurrentUnit(next, 'millimeter');
+    case 'meter': return convertMetricKey(next);
     case 'feet': return convertCurrentUnit(next, 'feet');
     case 'inch': return convertCurrentUnit(next, 'inch');
     case 'fraction': {
@@ -1407,7 +1750,14 @@ function handleSecondary(state: CalculatorState, key: KeyId): CalculatorState {
     case '2': return memoryStore(next, 'm2');
     case '3': return memoryStore(next, 'm3');
     case 'subtract': return changeSign(next);
-    case 'pi': return showValue({ ...next, inputKind: undefined, angleDisplayMode: undefined }, scalar(Math.PI / 180), 'ArcK');
+    case 'pi': return {
+      ...showValue(
+        { ...clearSequence(next), inputKind: undefined, angleDisplayMode: undefined },
+        scalar(Math.PI / 180),
+        'ArcK',
+      ),
+      inputActive: true,
+    };
     case '0': return velocity(next);
     case 'decimal': return dms(next);
     case 'equals': return showPreference(next, 0, 'edit');
@@ -1417,7 +1767,12 @@ function handleSecondary(state: CalculatorState, key: KeyId): CalculatorState {
 }
 
 function primaryPress(state: CalculatorState, key: KeyId): CalculatorState {
-  if (state.sequence?.trigger === key) return advanceSequence(state);
+  const freshInput = state.inputActive
+    || Boolean(state.entry)
+    || state.fractionNumerator !== undefined
+    || state.composedInches !== undefined
+    || state.exponentBase !== undefined;
+  if (state.sequence?.trigger === key && !freshInput) return advanceSequence(state);
   if (/^[0-9]$/.test(key)) return addDigit(state, key);
   switch (key) {
     case 'decimal': return addDecimal(state);
@@ -1508,7 +1863,7 @@ function primaryPress(state: CalculatorState, key: KeyId): CalculatorState {
     case 'add': return commitOperator(state, '+');
     case 'equals': return calculateEquals(state);
     case 'pi': return {
-      ...showValue({ ...state, inputKind: undefined, angleDisplayMode: undefined }, scalar(Math.PI), 'π'),
+      ...showValue({ ...clearSequence(state), inputKind: undefined, angleDisplayMode: undefined }, scalar(Math.PI), 'π'),
       inputActive: true,
     };
     case 'mplus': return memoryPlus(state);
@@ -1537,7 +1892,10 @@ function clearRuntime(state: CalculatorState, fullTemporary = false): Calculator
     registers: fullTemporary ? {} : state.registers,
     triangle: fullTemporary ? {} : state.triangle,
     triangleInputs: fullTemporary ? [] : state.triangleInputs,
+    triangleUnits: fullTemporary ? {} : state.triangleUnits,
     circle: fullTemporary ? {} : state.circle,
+    circleResultUnit: fullTemporary ? undefined : state.circleResultUnit,
+    circleRadiusUnit: fullTemporary ? undefined : state.circleRadiusUnit,
     memory: fullTemporary ? { ...state.memory, cumulative: undefined } : state.memory,
     velocityCycleIndex: fullTemporary ? 0 : state.velocityCycleIndex,
     display: { ...ZERO_DISPLAY },
@@ -1571,7 +1929,7 @@ function press(state: CalculatorState, key: KeyId): CalculatorState {
     return { ...state, modifier: state.modifier === 'convert' ? undefined : 'convert', lastKey: key, display: { ...state.display, label: 'CONV' } };
   }
   if (key === 'recall') {
-    if (state.modifier === 'recall') return { ...handleRecall(state, key), lastKey: key };
+    if (state.modifier === 'recall') return { ...handleRecall({ ...state, sequence: undefined }, key), lastKey: key };
     if (state.modifier === 'convert') return { ...handleSecondary(state, key), lastKey: key };
     return { ...state, modifier: 'recall', lastKey: key, display: { ...state.display, label: 'RCL' } };
   }
@@ -1580,16 +1938,27 @@ function press(state: CalculatorState, key: KeyId): CalculatorState {
     ? handleSecondary(state, key)
     : state.modifier === 'recall-convert'
       ? key === 'hip'
-        ? handleRecall(state, key)
+        ? handleRecall({ ...state, sequence: undefined }, key)
         : (() => { throw new CalcError('ENT Error'); })()
     : state.modifier === 'recall'
-      ? handleRecall(state, key)
+      ? handleRecall({ ...state, sequence: undefined }, key)
       : primaryPress(state, key);
   return { ...next, lastKey: key };
 }
 
 export function calculatorReducer(state: CalculatorState, action: CalculatorAction): CalculatorState {
   try {
+    if (action.type === 'factory-reset') {
+      return {
+        ...initialCalculatorState(),
+        display: {
+          label: '',
+          valueText: 'ALL rESEt',
+          unitText: '',
+          plainText: 'ALL rESEt',
+        },
+      };
+    }
     if (action.type === 'hydrate') {
       const payload = sanitizePersistedState(action.payload);
       return {

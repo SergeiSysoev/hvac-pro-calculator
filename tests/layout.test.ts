@@ -5,6 +5,7 @@ import {
   lcdValueSizeClass,
 } from '../components/calculator/PhysicalCalculator';
 import { accessibleKeyLabel } from '../components/calculator/CalculatorKeypad';
+import { splitLcdValueText } from '../components/calculator/LcdValue';
 
 const keyboardTarget = (interactive: boolean, editable = false): EventTarget => ({
   closest: () => interactive ? ({} as Element) : null,
@@ -46,6 +47,27 @@ describe('physical HVAC keypad layout', () => {
     expect(lcdValueSizeClass('19999999.99')).toBe('lcd-value-compact');
     expect(lcdValueSizeClass('123456789012')).toBe('lcd-value-dense');
     expect(lcdValueSizeClass('-19999999.99')).toBe('lcd-value-dense');
+  });
+
+  it('renders entered and calculated fractions as the original stacked LCD group', () => {
+    expect(splitLcdValueText('23 - 4 5/8')).toEqual([
+      '23 - 4 ',
+      { numerator: '5', denominator: '8' },
+    ]);
+    expect(splitLcdValueText('1/16')).toEqual([
+      { numerator: '1', denominator: '16' },
+    ]);
+  });
+
+  it('renders scientific notation as the original raised LCD exponent', () => {
+    expect(splitLcdValueText('2.17000e10')).toEqual([
+      '2.17000',
+      { exponent: '10' },
+    ]);
+    expect(splitLcdValueText('1.25000e-9')).toEqual([
+      '1.25000',
+      { exponent: '−9' },
+    ]);
   });
 });
 

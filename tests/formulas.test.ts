@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_PREFERENCES, degrees, evaluateExpression, formatValue, measurement, nearlyEqual, operate, scalar } from '@/lib/calculator/core';
 import {
   arcResults,
+  columnConeResults,
   convertDms,
   hipValleyResults,
   jackRafterResults,
@@ -49,7 +50,10 @@ describe('professional HVAC dimensional math', () => {
   });
 
   it('fits scalar and angle results to the physical display digit budget', () => {
-    expect(formatValue(scalar((500 / 1.3) ** 2), DEFAULT_PREFERENCES).valueText)
+    expect(formatValue(scalar((500 / 1.3) ** 2), DEFAULT_PREFERENCES, {
+      scalarMaxDecimals: 8,
+      scalarSignificantDigits: 8,
+    }).valueText)
       .toBe('147928.99');
     expect(formatValue(degrees(101.568715462), DEFAULT_PREFERENCES).valueText)
       .toBe('101.5687');
@@ -84,7 +88,7 @@ describe('professional HVAC dimensional math', () => {
     const mixed = operate(measurement(11, 'in'), '+', measurement(2 + 1 / 12, 'ft'));
     expect(formatValue(sum, DEFAULT_PREFERENCES).unitText).toBe('INCH');
     expect(formatValue(mixed, DEFAULT_PREFERENCES)).toMatchObject({
-      valueText: '3  0',
+      valueText: '3 - 0',
       unitText: 'FEET        INCH',
     });
   });
@@ -108,6 +112,10 @@ describe('professional HVAC dimensional math', () => {
     expect(formatValue(squareMillimeters, DEFAULT_PREFERENCES).unitText).toBe('SQ MM');
     expect(formatValue(squareMillimeters, { ...DEFAULT_PREFERENCES, areaFormat: 'sq-m' }).unitText).toBe('SQ M');
     expect(formatValue(squareMillimeters, { ...DEFAULT_PREFERENCES, areaFormat: 'sq-ft' }).unitText).toBe('SQ FEET');
+  });
+
+  it('does not render a rounded dimensional zero with a negative sign', () => {
+    expect(formatValue(measurement(-0.01, 'in'), DEFAULT_PREFERENCES).valueText).toBe('0');
   });
 });
 
@@ -166,10 +174,22 @@ describe('published field-calculator guide examples', () => {
   });
 
   it('solves Law of Cosines and Heron area', () => {
-    const results = lawOfCosines(60, 72, 84);
+    const results = lawOfCosines(38 * 12 + 5, 23 * 12 + 4 + 9 / 16, 26 * 12 + 1 + 13 / 16);
     const angles = results.slice(0, 3).map((result) => result.value.amount);
+    expect(results.map((result) => result.label)).toEqual(['∠A', '∠B', '∠C', 'AREA', 'a', 'b', 'c']);
+    expect(angles).toEqual([
+      expect.closeTo(101.5734, 4),
+      expect.closeTo(36.59978, 5),
+      expect.closeTo(41.8268, 4),
+    ]);
     expect(angles.reduce((sum, value) => sum + value, 0)).toBeCloseTo(180, 8);
-    expect(results[3].value.amount).toBeCloseTo(2116.35914, 4);
+    expect(results[3].value.amount / 144).toBeCloseTo(299.4929, 4);
+  });
+
+  it('rejects impossible and non-finite Law of Cosines triangles', () => {
+    expect(() => lawOfCosines(3, 4, 7)).toThrow('ENT Error');
+    expect(() => lawOfCosines(Number.NaN, 4, 5)).toThrow('ENT Error');
+    expect(() => lawOfCosines(3, Number.POSITIVE_INFINITY, 5)).toThrow('ENT Error');
   });
 
   it('matches the documented basic offset', () => {
@@ -190,18 +210,67 @@ describe('published field-calculator guide examples', () => {
     expect(fan3.registers.bNew).toBeCloseTo(12.77789, 5);
   });
 
+  it('rejects non-positive physical Fan Law inputs', () => {
+    expect(() => solveFanLaw(1, { a: -1250, aNew: 1400, b: 750 })).toThrow('ENT Error');
+  });
+
   it('matches velocity pressure constants', () => {
+    expect(velocityPressureResults(0.049).map((result) => result.label))
+      .toEqual(['FPM', 'VP', 'MPS', 'KPA', 'ENTRY']);
     expect(velocityPressureResults(0.049)[0].value.amount).toBeCloseTo(886.5445, 4);
     expect(velocityPressureResults(0.123)[0].value.amount).toBeCloseTo(1404.608, 3);
-    expect(velocityPressureResults(500)[1].value.amount).toBeCloseTo(0.015586, 6);
+    const from500 = velocityPressureResults(500);
+    expect(from500[0].value.amount).toBeCloseTo(89554.52, 2);
+    expect(from500[1].value.amount).toBeCloseTo(0.015586, 6);
+    expect(from500[2].value.amount).toBeCloseTo(29.06888, 5);
+    expect(from500[3].value.amount).toBeCloseTo(147928.99, 2);
+  });
+
+  it('rejects negative and non-finite velocity-pressure entries', () => {
+    expect(() => velocityPressureResults(-1)).toThrow('ENT Error');
+    expect(() => velocityPressureResults(Number.NaN)).toThrow('ENT Error');
+    expect(() => velocityPressureResults(Number.POSITIVE_INFINITY)).toThrow('ENT Error');
   });
 
   it('matches the documented arc example', () => {
     const results = arcResults({ radius: 30, arcLength: 39 });
+    expect(results.slice(0, 6).map((result) => result.label))
+      .toEqual(['ARC', 'CORD', 'SEG', 'PIE', 'RISE', 'OC']);
     expect(results[0].value.amount).toBeCloseTo(74.48451, 5);
     expect(results[1].value.amount).toBeCloseTo(36.31118, 5);
     expect(results[2].value.amount / 144).toBeCloseTo(1.051381, 5);
     expect(results[3].value.amount / 144).toBeCloseTo(4.0625, 6);
+    expect(results[4].value.amount).toBeCloseTo(6.117486, 6);
+  });
+
+  it('rejects invalid arc sweeps and returns every documented wall station', () => {
+    expect(() => arcResults({ radius: 30, arcDegrees: 0 })).toThrow('ENT Error');
+    expect(() => arcResults({ radius: 30, arcDegrees: 361 })).toThrow('ENT Error');
+    const wallStations = arcResults({ radius: 2400, arcDegrees: 180 }, 16)
+      .filter((result) => /^AW\d+$/.test(result.label));
+    expect(wallStations).toHaveLength(149);
+    expect(wallStations.at(-1)?.label).toBe('AW149');
+  });
+
+  it('rejects unsafe arc-wall enumerations before allocating the result list', () => {
+    expect(() => arcResults({ radius: 160_032, arcDegrees: 180 }, 16)).toThrow('0-fL0');
+  });
+
+  it('matches the documented column and cone examples with physical display labels', () => {
+    const column = columnConeResults(14, 54);
+    expect(column.map((result) => result.label))
+      .toEqual(['COL', 'COL AREA', 'CONE', 'CONE AREA']);
+    expect(column[0].value.amount / 1728).toBeCloseTo(19.24226, 5);
+
+    const cone = columnConeResults(21, 60);
+    expect(cone[2].value.amount / 1728).toBeCloseTo(16.03521, 5);
+  });
+
+  it('rejects non-positive and non-finite column/cone dimensions', () => {
+    expect(() => columnConeResults(0, 60)).toThrow('ENT Error');
+    expect(() => columnConeResults(21, -1)).toThrow('ENT Error');
+    expect(() => columnConeResults(Number.NaN, 60)).toThrow('ENT Error');
+    expect(() => columnConeResults(21, Number.POSITIVE_INFINITY)).toThrow('ENT Error');
   });
 
   it('matches regular and irregular hip geometry', () => {
@@ -216,12 +285,41 @@ describe('published field-calculator guide examples', () => {
     expect(irregular[4].value.amount).toBeCloseTo(48.814075, 6);
   });
 
+  it('rejects invalid regular and irregular hip geometry', () => {
+    expect(() => hipValleyResults(0, 7 / 12)).toThrow('ENT Error');
+    expect(() => hipValleyResults(48, -7 / 12)).toThrow('ENT Error');
+    expect(() => hipValleyResults(48, 7 / 12, 0)).toThrow('ENT Error');
+    expect(() => hipValleyResults(48, 7 / 12, Number.NaN)).toThrow('ENT Error');
+  });
+
   it('matches regular jack lengths at 16 inches on center', () => {
     const results = jackRafterResults(101, 7 / 12, DEFAULT_PREFERENCES);
     const jack1 = results.find((result) => result.label === 'JK1')!;
     const jack6 = results.find((result) => result.label === 'JK6')!;
     expect(jack1.value.amount).toBeCloseTo(98.36, 1);
     expect(jack6.value.amount).toBeCloseTo(5.7885, 3);
+  });
+
+  it('returns every Jack through the terminal zero beyond two display digits', () => {
+    const jacks = jackRafterResults(2400, 7 / 12, DEFAULT_PREFERENCES)
+      .filter((result) => /^JK\d+$/.test(result.label));
+    expect(jacks).toHaveLength(150);
+    expect(jacks.at(-1)).toMatchObject({ label: 'JK150', value: { amount: 0 } });
+  });
+
+  it('rejects unsafe Jack enumerations before allocating the result list', () => {
+    expect(() => jackRafterResults(160_016, 7 / 12, DEFAULT_PREFERENCES)).toThrow('0-fL0');
+  });
+
+  it('rejects invalid Jack geometry and spacing', () => {
+    expect(() => jackRafterResults(0, 7 / 12, DEFAULT_PREFERENCES)).toThrow('ENT Error');
+    expect(() => jackRafterResults(48, -7 / 12, DEFAULT_PREFERENCES)).toThrow('ENT Error');
+    expect(() => jackRafterResults(48, 7 / 12, {
+      ...DEFAULT_PREFERENCES,
+      onCenter: 0,
+    })).toThrow('ENT Error');
+    expect(() => jackRafterResults(48, 7 / 12, DEFAULT_PREFERENCES, Number.NaN))
+      .toThrow('ENT Error');
   });
 
   it('mates irregular jack pairs at the same hip position', () => {
@@ -279,6 +377,10 @@ describe('published field-calculator guide examples', () => {
     expect(find('RUN')).toBe(150);
     expect(nearlyEqual(find('STRG'), 186.94, 0.001)).toBe(true);
     expect(find('INCL')).toBeCloseTo(36.64003, 5);
+  });
+
+  it('rejects a degenerate one-riser stair instead of returning contradictory geometry', () => {
+    expect(() => stairResults(1, undefined, DEFAULT_PREFERENCES)).toThrow('DIM Error');
   });
 
   it('keeps an atypical stair-ratio warning on every result in the cycle', () => {
