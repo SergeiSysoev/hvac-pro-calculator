@@ -60,7 +60,7 @@ button { -webkit-tap-highlight-color: transparent; }
 .app-frame {
   position: relative;
   display: flex;
-  width: min(100vw, 540px);
+  width: min(100vw, 760px);
   height: 100dvh;
   min-height: 100svh;
   flex-direction: column;
@@ -235,35 +235,6 @@ button { -webkit-tap-highlight-color: transparent; }
   box-shadow: none;
 }
 
-.brand-strip {
-  display: grid;
-  min-height: 44px;
-  flex: 0 0 auto;
-  align-content: center;
-  gap: 1px;
-  padding: 0 4px 7px;
-}
-
-.brand-strip strong {
-  overflow: hidden;
-  font-family: var(--font-geist-sans), -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  font-size: clamp(16px, 4.6vw, 21px);
-  font-weight: 760;
-  line-height: 1.1;
-  letter-spacing: -.025em;
-  text-overflow: clip;
-  white-space: nowrap;
-}
-
-.brand-strip span {
-  color: #8e8e93;
-  font-size: clamp(10px, 2.5vw, 11px);
-  font-weight: 600;
-  line-height: 1.15;
-  letter-spacing: .01em;
-  text-align: left;
-}
-
 .power-row {
   display: grid;
   min-height: 49px;
@@ -276,9 +247,10 @@ button { -webkit-tap-highlight-color: transparent; }
 
 .reset-label {
   align-self: center;
-  color: #515657;
-  font-size: 7px;
-  font-style: italic;
+  color: #a9afad;
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1.2;
 }
 
 .power-key,
@@ -362,6 +334,13 @@ button { -webkit-tap-highlight-color: transparent; }
   box-shadow: 0 1px 1px rgba(0, 0, 0, .34);
 }
 
+.physical-key:disabled,
+.power-key:disabled {
+  cursor: default;
+  filter: saturate(.35);
+  opacity: .42;
+}
+
 .physical-key-dark { background: #29292d; }
 .physical-key-mid { background: #686a70; }
 .physical-key-light {
@@ -407,7 +386,7 @@ button { -webkit-tap-highlight-color: transparent; }
   flex-direction: column;
   justify-content: flex-end;
   gap: 7px;
-  overflow: visible;
+  overflow: hidden;
   padding: 13px 15px 14px;
   border: 1px solid rgba(255, 255, 255, .68);
   border-radius: 22px;
@@ -420,7 +399,10 @@ button { -webkit-tap-highlight-color: transparent; }
 }
 
 .calc-display-physical {
-  margin-bottom: 4px;
+  min-height: clamp(184px, 24dvh, 232px);
+  margin-bottom: 5px;
+  padding: 16px 17px;
+  justify-content: space-between;
 }
 
 .calc-display.is-error {
@@ -456,6 +438,10 @@ button { -webkit-tap-highlight-color: transparent; }
   font-size: 9px;
   font-weight: 720;
   letter-spacing: .02em;
+}
+
+.sequence-progress {
+  white-space: nowrap;
 }
 
 .expression-line {
@@ -526,6 +512,152 @@ button { -webkit-tap-highlight-color: transparent; }
   overflow-wrap: anywhere;
 }
 
+.named-result-equation {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding-block: 2px;
+}
+
+.named-result-label {
+  min-width: 0;
+  flex: 1 1 auto;
+  color: #505057;
+  font-size: clamp(14px, 3.8vw, 17px);
+  font-weight: 650;
+  letter-spacing: -.012em;
+  line-height: 1.18;
+  overflow-wrap: anywhere;
+}
+
+.named-result-value-line {
+  display: flex;
+  min-width: 0;
+  flex: 0 1 auto;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 8px;
+  color: #171719;
+  direction: ltr;
+  font-size: clamp(32px, 9.4vw, 48px);
+  font-variant-numeric: lining-nums tabular-nums;
+  font-weight: 650;
+  letter-spacing: -.045em;
+  line-height: 1.04;
+  text-align: right;
+}
+
+.named-result-value-line.expression-text-medium {
+  font-size: clamp(27px, 7.7vw, 40px);
+}
+
+.named-result-value-line.expression-text-small {
+  font-size: clamp(22px, 6.3vw, 33px);
+}
+
+.calc-display-physical .named-result-value-line {
+  font-size: clamp(38px, 11.5vw, 58px);
+}
+
+.calc-display-physical .named-result-value-line.expression-text-medium {
+  font-size: clamp(31px, 9vw, 46px);
+}
+
+.calc-display-physical .named-result-value-line.expression-text-small {
+  font-size: clamp(25px, 7.2vw, 37px);
+}
+
+.named-result-symbol {
+  flex: 0 0 auto;
+  color: #78787e;
+  font-weight: 480;
+}
+
+.named-result-value {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.display-error-content {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.display-error-expression {
+  overflow: hidden;
+  color: #8e4a50;
+  font-size: clamp(16px, 4.5vw, 21px);
+  font-variant-numeric: lining-nums tabular-nums;
+  line-height: 1.18;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.display-error-title {
+  color: #7f1d27;
+  font-size: clamp(24px, 7vw, 35px);
+  font-weight: 700;
+  letter-spacing: -.035em;
+  line-height: 1.05;
+}
+
+.display-guidance {
+  display: grid;
+  min-width: 0;
+  align-items: start;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 7px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(23, 23, 25, .1);
+  color: #55555b;
+  font-size: clamp(10.5px, 2.8vw, 12px);
+  font-weight: 530;
+  letter-spacing: -.006em;
+  line-height: 1.28;
+}
+
+.display-guidance strong {
+  min-width: 36px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  color: #5c4700;
+  background: #ffedaa;
+  font-size: 9px;
+  font-weight: 760;
+  letter-spacing: .025em;
+  line-height: 1.25;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.display-guidance span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.display-guidance-warning strong {
+  color: #654000;
+  background: #ffe19a;
+}
+
+.display-guidance-error {
+  border-top-color: rgba(127, 29, 39, .16);
+  color: #78434a;
+}
+
+.display-guidance-error strong {
+  color: #fff;
+  background: #b52b3a;
+}
+
+.calc-display-trade .display-guidance {
+  font-size: 10.5px;
+}
+
 .math-fraction {
   display: inline-grid;
   min-width: .72em;
@@ -551,14 +683,6 @@ button { -webkit-tap-highlight-color: transparent; }
   font-weight: 620;
   letter-spacing: 0;
   vertical-align: super;
-}
-
-.display-note {
-  margin: 6px 8px 0;
-  color: #a5aaa7;
-  font-size: 10px;
-  line-height: 1.35;
-  text-align: center;
 }
 
 .trade-keypad {
@@ -645,6 +769,13 @@ button { -webkit-tap-highlight-color: transparent; }
   transform: scale(.97);
   filter: brightness(.8);
   box-shadow: 0 1px 1px rgba(0,0,0,.32);
+}
+
+.calc-key:disabled,
+.settings-button:disabled {
+  cursor: default;
+  filter: saturate(.35);
+  opacity: .42;
 }
 
 .calc-key:focus-visible,
@@ -824,7 +955,7 @@ button { -webkit-tap-highlight-color: transparent; }
 }
 
 .preferences-dialog {
-  width: min(100%, 540px);
+  width: min(100%, 760px);
   max-height: min(88dvh, 780px);
   overflow: auto;
   padding: 8px 16px calc(16px + env(safe-area-inset-bottom));
@@ -861,23 +992,26 @@ button { -webkit-tap-highlight-color: transparent; }
   .physical-page { padding-inline: 0; }
   .calculator-face { padding-inline: 8px; }
   .physical-keypad { column-gap: 5px; }
-  .brand-strip strong { font-size: 14px; }
+  .calc-display-physical { padding-inline: 13px; }
+  .display-guidance { gap: 5px; }
 }
 
-@media (max-height: 720px) {
+@media (max-height: 860px) {
   .app-header { min-height: calc(52px + env(safe-area-inset-top)); }
   .brand-badge { width: 34px; height: 34px; border-radius: 10px; }
   .keypad-page { gap: 6px; padding-top: 6px; }
-  .calc-display { min-height: 106px; gap: 4px; padding-block: 10px; }
+  .calc-display { min-height: 118px; gap: 5px; padding-block: 10px; }
+  .calc-display-physical { min-height: 150px; padding-block: 11px; }
   .expression-line { min-height: 42px; font-size: clamp(25px, 7.3vw, 36px); }
   .expression-result { padding-top: 5px; font-size: clamp(23px, 6.8vw, 32px); }
+  .named-result-value-line,
+  .calc-display-physical .named-result-value-line { font-size: clamp(29px, 8.5vw, 42px); }
+  .display-guidance { padding-top: 5px; font-size: 10px; line-height: 1.2; }
   .trade-keypad { gap: 4px; grid-auto-rows: minmax(44px, 1fr); }
   .page-dots { min-height: calc(44px + env(safe-area-inset-bottom)); }
 
   .physical-calculator { min-height: 614px; }
   .calculator-face { padding-block: 7px 6px; }
-  .brand-strip { min-height: 38px; padding-bottom: 4px; }
-  .brand-strip strong { font-size: clamp(14px, 4.3vw, 18px); }
   .power-row { min-height: 48px; }
   .power-key { min-height: 44px; }
   .physical-keypad { min-height: 408px; grid-template-rows: repeat(8, minmax(51px, 1fr)); column-gap: 5px; }

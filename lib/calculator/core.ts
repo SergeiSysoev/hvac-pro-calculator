@@ -29,6 +29,17 @@ export interface CalcValue {
   approximate?: boolean;
   /** Finest supported binary-inch denominator explicitly used by the operator. */
   fractionDenominator?: FractionResolution;
+  /** Unit-like field meaning carried by unitless HVAC results through memory. */
+  semanticKind?:
+    | 'percent-grade'
+    | 'fpm'
+    | 'velocity-pressure-imperial'
+    | 'mps'
+    | 'velocity-pressure-pa'
+    | 'cfm'
+    | 'rpm'
+    | 'static-pressure'
+    | 'bhp';
   source?: {
     amount: number;
     unit: 'ft' | 'in' | 'm' | 'mm';

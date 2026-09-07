@@ -173,19 +173,24 @@ export default function PhysicalCalculator({
   return (
     <div className="physical-calculator">
       <div className="calculator-face">
-        <div className="brand-strip">
-          <strong>PROFESSIONAL HVAC CALCULATOR</strong>
-          <span>Sheet metal · Construction math</span>
-        </div>
-
         <CalculatorDisplay active={active} state={state} variant="physical" />
 
         <div className="power-row">
-          <span className="reset-label">RESET</span>
-          <button type="button" className="power-key power-off" onClick={() => onPress('off')}>Off</button>
+          <span className="reset-label">RESET: × + On/C · KEYBOARD: * + Esc</span>
+          <button
+            type="button"
+            className="power-key power-off"
+            disabled={!state.powered}
+            onClick={() => onPress('off')}
+          >
+            Off
+          </button>
           <button
             type="button"
             className="power-key power-on"
+            aria-label={state.powered
+              ? 'On/C'
+              : 'Turn calculator on. For factory reset by touch, hold Multiply and press On/C. With a keyboard, hold asterisk and press Escape.'}
             style={{ touchAction: 'none' }}
             onPointerDown={triggerResetFromOn}
             onPointerUp={finishResetOn}
@@ -212,6 +217,8 @@ export default function PhysicalCalculator({
           {PHYSICAL_KEY_ROWS.flat().map((key) => {
             const secondaryActive = (state.modifier === 'convert' || state.modifier === 'recall-convert') && key.secondary;
             const latched = key.id === 'conv' && state.modifier === 'convert';
+            const resetModifier = !state.powered && key.id === 'multiply';
+            const disabled = !state.powered && !resetModifier;
             return (
               <div className="physical-key-cell" key={key.id}>
                 <span className={`secondary-label ${secondaryActive ? 'secondary-active' : ''}`} aria-hidden="true">
@@ -222,12 +229,16 @@ export default function PhysicalCalculator({
                   className={`physical-key physical-key-${key.tone ?? 'light'} ${latched ? 'key-latched' : ''}`}
                   aria-label={accessibleKeyLabel({
                     id: key.id,
-                    label: key.primary,
+                    label: resetModifier
+                      ? 'Touch reset modifier: hold Multiply, then press On/C. Keyboard reset: hold asterisk and press Escape'
+                      : key.primary,
                     key: key.id,
                     detail: key.detail,
-                    secondary: key.secondary,
+                    secondary: resetModifier ? undefined : key.secondary,
                   })}
                   aria-pressed={key.id === 'conv' ? latched : undefined}
+                  disabled={disabled}
+                  tabIndex={resetModifier ? -1 : undefined}
                   data-key={key.id}
                   style={key.id === 'multiply' && !state.powered ? { touchAction: 'none' } : undefined}
                   onPointerDown={key.id === 'multiply' ? startResetHold : undefined}

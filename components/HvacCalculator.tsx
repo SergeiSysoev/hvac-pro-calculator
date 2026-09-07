@@ -203,7 +203,7 @@ function tradeKeys(accuracy: number): KeyFace[] {
     { id: 't-y', label: 'y', key: 'rise', detail: 'Rise' },
     { id: 't-r', label: 'r', key: 'diag', detail: 'Diag' },
     { id: 't-theta', label: 'θ', key: 'pitch', detail: 'Pitch' },
-    { id: 't-on', label: 'On/C', key: 'on', tone: 'danger' },
+    { id: 't-on', label: 'On/C', key: 'on', tone: 'danger', powerControl: true },
     { id: 't-inch', label: 'Inch', key: 'inch', tone: 'dark' },
 
     { id: 't-conv', label: 'Conv', key: 'conv', tone: 'accent' },
@@ -425,6 +425,7 @@ export default function HvacCalculator() {
 
       const key = calculatorKeyForKeyboardEvent(event.key, event.target, document.activeElement);
       if (!key) return;
+      if (!state.powered && key !== 'on') return;
       event.preventDefault();
       press(key);
     };
@@ -632,12 +633,12 @@ export default function HvacCalculator() {
                   <span>PROFESSIONAL HVAC</span>
                   <strong>Trade calculator</strong>
                 </div>
-                <button type="button" className="settings-button" aria-label="Open calculator preferences" onClick={openPreferences}>
+                <button type="button" className="settings-button" aria-label="Open calculator preferences" disabled={!state.powered} onClick={openPreferences}>
                   <span aria-hidden="true">⚙</span>
                 </button>
               </div>
               <CalculatorDisplay active={activePage === 1} state={state} />
-              <CalculatorKeypad keys={trade} modifier={state.modifier} onAction={handleAction} onPress={press} />
+              <CalculatorKeypad keys={trade} modifier={state.modifier} powered={state.powered} onAction={handleAction} onPress={press} />
             </div>
           </section>
 

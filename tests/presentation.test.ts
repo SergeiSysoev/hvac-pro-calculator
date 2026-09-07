@@ -227,7 +227,7 @@ describe('modern calculator expression display', () => {
         expressionText: '(2 + 3)',
         resultText: '5',
         resultSymbol: '=',
-        ariaText: '(2 plus 3) equals 5',
+        ariaText: '(2 plus 3) equals 5. Continue with an operator or tap =.',
         entryActive: false,
       });
   });
@@ -365,7 +365,7 @@ describe('modern calculator expression display', () => {
       expressionText: '1″ →',
       resultText: '0.025 m',
       resultSymbol: '≈',
-      ariaText: '1 inches converts to approximately 0.025 m',
+      ariaText: '1 inches converts to approximately 0.025 m. Choose another conversion, an operator, or a new value.',
     });
     expect(converted.current?.approximate).toBeUndefined();
     expect(converted.currentDisplayMetadata?.exactness).toBe('exact');
@@ -445,14 +445,14 @@ describe('modern calculator expression display', () => {
     expect(calculatorExpressionView(run(['2', 'decimal', '3', 'decimal'])))
       .toMatchObject({
         expressionText: '2° 3′ …″',
-        ariaText: '2 degrees 3 minutes blank seconds',
+        ariaText: '2 degrees 3 minutes blank seconds. Complete the angle, then choose an operation or conversion.',
       });
 
     expect(calculatorExpressionView(run([
       '3', '0', 'decimal', '8', '9', 'decimal', '0', 'add',
     ]))).toMatchObject({
       expressionText: '31° 29′ 00″ +',
-      ariaText: '31 degrees 29 minutes 00 seconds plus',
+      ariaText: '31 degrees 29 minutes 00 seconds plus. Enter the next value, then tap =.',
     });
   });
 
@@ -537,7 +537,7 @@ describe('modern calculator expression display', () => {
     ]))).toMatchObject({
       expressionText: '(1 m ÷ 3)²',
       resultText: '111111.1111 mm²',
-      ariaText: '(1 m divided by 3) squared approximately 111111.1111 square millimeters',
+      ariaText: '(1 m divided by 3) squared approximately 111111.1111 square millimeters. Continue with an operator, conversion, or new calculation.',
     });
 
     expect(calculatorExpressionView(run([
@@ -565,8 +565,8 @@ describe('modern calculator expression display', () => {
     expect(calculatorExpressionView(run([
       '1', '8', 'rise', '2', '0', 'pitch', 'run', 'multiply', '2', 'equals',
     ]))).toMatchObject({
-      expressionText: '≈49.45459 × 2',
-      resultText: '98.90919',
+      expressionText: '≈49 7/16″ × 2',
+      resultText: '98 15/16″',
     });
 
     expect(calculatorExpressionView(run([
@@ -610,18 +610,528 @@ describe('modern calculator expression display', () => {
 
   it('includes meaningful HVAC result context in the accessible announcement', () => {
     const view = calculatorExpressionView(run(['0', 'decimal', '0', '9', 'conv', '0']));
-    expect(view.contextText).toBe('FPM');
-    expect(view.ariaText).toMatch(/^FPM\./);
+    expect(view).toMatchObject({
+      contextText: 'Air velocity / pressure',
+      valueLabel: 'Air velocity',
+      valueText: expect.stringContaining('FPM'),
+    });
+    expect(view.ariaText).toMatch(/^Air velocity \/ pressure\. Air velocity/);
+  });
+
+  it('writes Circle results as complete named equations with a useful next step', () => {
+    const diameter = run(['6', 'circ']);
+    expect(calculatorExpressionView(diameter)).toMatchObject({
+      mode: 'named-result',
+      contextText: 'Circle',
+      valueLabel: 'Diameter',
+      valueText: '6″',
+      valueSymbol: '=',
+      progressText: '1 of 3',
+      guidanceText: 'Tap Circ to show Circumference.',
+    });
+
+    const circumference = run(['circ'], diameter);
+    expect(calculatorExpressionView(circumference)).toMatchObject({
+      valueLabel: 'Circumference',
+      valueSymbol: '≈',
+      progressText: '2 of 3',
+      guidanceText: 'Tap Circ to show Circle area.',
+    });
+
+    const area = run(['circ'], circumference);
+    expect(calculatorExpressionView(area)).toMatchObject({
+      valueLabel: 'Circle area',
+      valueSymbol: '≈',
+      progressText: '3 of 3',
+      guidanceText: 'Tap Circ to return to Diameter.',
+    });
+  });
+
+  it('restores the units carried only by HVAC result labels', () => {
+    expect(calculatorExpressionView(run([
+      '6', 'inch', 'pitch', 'pitch', 'pitch',
+    ]))).toMatchObject({
+      valueLabel: 'Percent grade',
+      valueText: '50%',
+    });
+
+    expect(calculatorExpressionView(run([
+      '1', '2', '5', '0', 'conv', '4',
+      '1', '4', '0', '0', 'conv', '7',
+      '7', '5', '0', 'conv', '5',
+      'conv', 'run',
+    ]))).toMatchObject({
+      contextText: 'Fan Law 1',
+      valueLabel: 'New fan speed',
+      valueText: expect.stringContaining('RPM'),
+    });
+  });
+
+  it('names both physical and Trade-page controls in sequence hints', () => {
+    const offset = calculatorExpressionView(run([
+      '1', '0', 'feet', 'run',
+      '5', 'feet', 'rise',
+      '7', 'feet', 'conv', '4',
+      'conv', 'left',
+    ]));
+    expect(offset.guidanceText).toContain('Tap Offset / (');
+
+    const column = calculatorExpressionView(run([
+      '6', 'inch', 'circ', '1', '0', 'feet', 'rise', 'conv', 'right',
+    ]));
+    expect(column.guidanceText).toContain('Tap Column / )');
+  });
+
+  it('uses human result names across every multi-result HVAC workflow', () => {
+    const samples: Array<[string, string, string, string]> = [
+      ['circle', 'AREA', 'Circle', 'Circle area'],
+      ['arc', 'AW2', 'Circular arc', 'Arched-wall stud 2 length'],
+      ['pitch', '%GRD', 'Pitch', 'Percent grade'],
+      ['diag', 'PLMB', 'Right triangle', 'Plumb cut angle'],
+      ['offset', 'X', 'Offset', 'Actual length'],
+      ['lawcos', 'AREA', 'Law of Cosines', 'Triangle area'],
+      ['hip', 'CHK1', 'Hip / valley', 'Cheek cut 1'],
+      ['jacks', 'JK1', 'Regular jacks', 'Regular jack 1 length'],
+      ['ir-jacks', 'IJ2', 'Irregular jacks', 'Irregular jack 2 length'],
+      ['stairs', 'R-HT', 'Stair layout', 'Actual riser height'],
+      ['column-cone', 'COL AREA', 'Column / cone', 'Column total surface area'],
+      ['velocity', 'KPA', 'Air velocity / pressure', 'Velocity pressure'],
+    ];
+
+    for (const [id, rawLabel, contextText, valueLabel] of samples) {
+      const state = initialCalculatorState();
+      const value = { amount: 12, power: 1, unit: 'in' as const, system: 'imperial' as const };
+      state.current = value;
+      state.currentDisplayMetadata = { provenance: 'hvac', exactness: 'exact' };
+      state.display = { label: rawLabel, valueText: '12', unitText: 'in', plainText: '12 in' };
+      const trigger = id === 'offset' ? 'left' : id === 'lawcos' ? '9' : 'circ';
+      state.sequence = {
+        id,
+        results: [{ label: rawLabel, value }],
+        index: 0,
+        trigger,
+      };
+      state.lastKey = trigger;
+      expect(calculatorExpressionView(state)).toMatchObject({
+        mode: 'named-result',
+        contextText,
+        valueLabel,
+      });
+    }
+  });
+
+  it('qualifies Jack cut results by the active regular or irregular side', () => {
+    const state = initialCalculatorState();
+    const length = { amount: 16, power: 1, unit: 'in' as const, system: 'imperial' as const };
+    const angle = { amount: 30, power: 0, unit: 'auto' as const, system: 'neutral' as const, angle: true };
+    state.current = angle;
+    state.currentDisplayMetadata = { provenance: 'hvac', exactness: 'approximate' };
+    state.display = { label: 'PLMB', valueText: '30', unitText: '°', plainText: '30°' };
+    state.sequence = {
+      id: 'jacks',
+      results: [
+        { label: 'JKOC', value: length },
+        { label: 'JK1', value: length },
+        { label: 'PLMB', value: angle },
+        { label: 'IJOC', value: length },
+        { label: 'IJ1', value: length },
+        { label: 'PLMB', value: angle },
+      ],
+      index: 5,
+      trigger: 'jack',
+    };
+    state.lastKey = 'jack';
+
+    expect(calculatorExpressionView(state)).toMatchObject({
+      contextText: 'Irregular jacks',
+      valueLabel: 'Irregular-side plumb cut angle',
+      guidanceText: 'Tap Jack to return to Regular on-center spacing.',
+    });
+  });
+
+  it('shows concise recovery and contextual branch guidance inside the display model', () => {
+    const error = calculatorExpressionView(run(['circ']));
+    expect(error).toMatchObject({
+      mode: 'error',
+      errorTitle: 'Circle needs valid inputs',
+      guidanceTone: 'error',
+    });
+    expect(error.guidanceText).toContain('enter a positive diameter');
+    expect(error.guidanceText).toContain('bare number is treated as inches');
+    expect(error.ariaText.match(/Tap On\/C/g)).toHaveLength(1);
+
+    expect(calculatorExpressionView(run(['8', 'run'])).guidanceText)
+      .toBe('Run is stored. Enter Rise, Diagonal, or Pitch.');
+    expect(calculatorExpressionView(run(['2', 'add'])).guidanceText)
+      .toBe('Enter the next value, then tap =.');
+    expect(calculatorExpressionView(run(['2', 'add', '3'])).guidanceText)
+      .toBe('Tap = to calculate, or choose another operator to continue.');
+    const convertedSequence = calculatorExpressionView(run(['1', '0', 'circ', 'conv']));
+    expect(convertedSequence.guidanceText).toBe('Choose a key to use its yellow function.');
+    expect(convertedSequence.guidanceText).not.toContain('Tap Circ');
+    expect(calculatorExpressionView(run(['6'])).guidanceText)
+      .toContain('Length tools treat a bare number as inches.');
+  });
+
+  it('does not recommend stale geometry after a unary operation replaces the result', () => {
+    const squaredHip = run([
+      '3', 'feet', 'run',
+      '4', 'feet', 'rise',
+      'hip', 'square',
+    ]);
+    const view = calculatorExpressionView(squaredHip);
+    expect(view.guidanceText).toBe(
+      'Continue with an operator, conversion, or new calculation.',
+    );
+    expect(view.guidanceText).not.toContain('Conv + Pitch');
+    expect(view.guidanceText).not.toContain('Rise');
+  });
+
+  it('does not let stored geometry guidance consume a recalled semantic operand', () => {
+    const stored = run([
+      '3', 'feet', 'run',
+      '4', 'feet', 'rise',
+      '0', 'decimal', '0', '4', '9', 'conv', '0',
+      'conv', '1', 'on',
+    ]);
+    const recalled = run(['recall', '1'], stored);
+    const view = calculatorExpressionView(recalled);
+    expect(view.guidanceText).toBe(
+      'Current value is ready. Choose an operator, conversion, or compatible function.',
+    );
+    expect(view.guidanceText).not.toContain('Conv + Pitch');
+  });
+
+  it('temporarily presents Recall instead of a stale multi-result sequence', () => {
+    const view = calculatorExpressionView(run(['1', '0', 'circ', 'recall']));
+    expect(view).toMatchObject({
+      contextText: 'Recall',
+      valueLabel: 'Current value',
+      valueText: '10″',
+      progressText: undefined,
+      guidanceText: 'Choose the stored value or preference you want to recall.',
+    });
+  });
+
+  it('does not promise sequence advancement after an unrelated unary result', () => {
+    const circleSquared = calculatorExpressionView(run(['1', '0', 'circ', 'square']));
+    expect(circleSquared.progressText).toBeUndefined();
+    expect(circleSquared.guidanceText).not.toContain('Tap Circ');
+    expect(circleSquared.contextText).not.toBe('Circle');
+
+    const hipSquared = calculatorExpressionView(run([
+      '3', 'feet', 'run', '4', 'feet', 'rise', 'hip', 'square',
+    ]));
+    expect(hipSquared.progressText).toBeUndefined();
+    expect(hipSquared.guidanceText).not.toContain('Tap Hip/V');
+    expect(hipSquared.contextText).not.toBe('Hip / valley');
+
+    const arcSquared = calculatorExpressionView(run([
+      '5', 'feet', 'circ', '3', 'feet', '3', 'inch', 'conv', 'circ', 'square',
+    ]));
+    expect(arcSquared.progressText).toBeUndefined();
+    expect(arcSquared.guidanceText).not.toContain('Tap Circ');
+    expect(arcSquared.contextText).not.toBe('Circular arc');
+
+    const grouped = calculatorExpressionView(run(['6', 'circ', 'left', 'circ']));
+    expect(grouped).toMatchObject({
+      mode: 'entry',
+      expressionText: '(6″',
+      guidanceText: 'Choose an operator or tap ) to close this group.',
+    });
+    expect(grouped.contextText).not.toBe('Circle');
+  });
+
+  it('keeps valid sequence guidance through display-only conversions and storage overlays', () => {
+    const converted = calculatorExpressionView(run(['6', 'circ', 'meter']));
+    expect(converted).toMatchObject({
+      progressText: '1 of 3',
+      guidanceText: 'Tap Circ to show Circumference.',
+    });
+
+    const memorized = calculatorExpressionView(run(['6', 'circ', 'mplus']));
+    expect(memorized).toMatchObject({
+      progressText: undefined,
+      guidanceText: 'Tap Circ to show Circumference.',
+    });
+  });
+
+  it('restores a result cycle after Conv is canceled without changing the value', () => {
+    expect(calculatorExpressionView(run(['6', 'circ', 'conv', 'conv']))).toMatchObject({
+      mode: 'named-result',
+      contextText: 'Circle',
+      valueLabel: 'Diameter',
+      progressText: '1 of 3',
+      guidanceText: 'Tap Circ to show Circumference.',
+    });
+    expect(calculatorExpressionView(run([
+      '6', 'inch', 'pitch', 'conv', 'conv',
+    ]))).toMatchObject({
+      mode: 'named-result',
+      contextText: 'Pitch',
+      valueLabel: 'Pitch',
+      progressText: '1 of 4',
+      guidanceText: 'Tap Pitch to show Pitch angle.',
+    });
+  });
+
+  it('keeps HVAC meaning when a unitless result becomes an arithmetic operand', () => {
+    const grade = calculatorExpressionView(run([
+      '6', 'inch', 'pitch', 'pitch', 'pitch', 'add',
+    ]));
+    expect(grade).toMatchObject({
+      contextText: 'Enter next value',
+      expressionText: '50 [% grade] +',
+      progressText: undefined,
+    });
+
+    const velocity = calculatorExpressionView(run([
+      '0', 'decimal', '0', '9', 'conv', '0', 'add',
+    ]));
+    expect(velocity).toMatchObject({
+      contextText: 'Enter next value',
+      expressionText: '1201.5 FPM +',
+      progressText: undefined,
+    });
+
+    const pressure = calculatorExpressionView(run([
+      '5', '0', '0', 'conv', '0', '0', 'add',
+    ]));
+    expect(pressure.expressionText).toMatch(/ in\. w\.g\. \+$/);
+    expect(pressure.expressionText).not.toContain('″. w.g.');
+    expect(pressure.ariaText).not.toContain('inches . w.g.');
+
+    const fan = run([
+      '1', '2', '5', '0', 'conv', '4',
+      '1', '4', '0', '0', 'conv', '7',
+      '7', '5', '0', 'conv', '5',
+      'conv', 'run',
+    ]);
+    expect(calculatorExpressionView(run(['add'], fan))).toMatchObject({
+      contextText: 'Enter next value',
+      expressionText: expect.stringMatching(/RPM \+$/),
+      progressText: undefined,
+    });
+  });
+
+  it('renders semantic result suffixes once and without a calculator-style trailing dot', () => {
+    const grade = calculatorExpressionView(run([
+      '6', 'inch', 'pitch', 'pitch', 'pitch',
+    ]));
+    expect(grade.valueText).toBe('50%');
+    expect(grade.valueText).not.toMatch(/\.%|% grade.*% grade/);
+
+    const gradeModifier = calculatorExpressionView(run([
+      '6', 'inch', 'pitch', 'pitch', 'pitch', 'conv',
+    ]));
+    expect(gradeModifier.expressionText).toBe('50% grade');
+
+    const velocity = calculatorExpressionView(run([
+      '0', 'decimal', '0', '4', '9', 'conv', '0', 'conv',
+    ]));
+    expect(velocity.expressionText).toBe('≈886.5445 FPM');
+    expect(velocity.expressionText).not.toContain('. FPM');
+  });
+
+  it('advertises a valid Fan Law path even when A, B, and C cannot form a triangle', () => {
+    const state = run([
+      '1', '0', 'conv', '4',
+      '2', '0', 'conv', '7',
+      '5', 'conv', '5',
+      '1', '0', '0', 'conv', '6',
+    ]);
+    const guidance = calculatorExpressionView(state).guidanceText;
+    expect(guidance).toContain('choose Fan Law 1, 2, or 3');
+    expect(guidance).toContain('must form a valid triangle');
+  });
+
+  it('does not promise Law of Cosines when A, B, or C contains an HVAC field value', () => {
+    const state = run([
+      '0', 'decimal', '0', '9', 'conv', '0',
+      'conv', '4', 'conv', '5', 'conv', '6', 'on',
+    ]);
+    const guidance = calculatorExpressionView(state).guidanceText;
+    expect(guidance).toContain('include an HVAC field value');
+    expect(guidance).toContain('Replace it with a length or bare number');
+    expect(guidance).not.toContain('A, B, and C are ready');
+  });
+
+  it('does not present a special result as a named answer while it is the right operand', () => {
+    const view = calculatorExpressionView(run(['2', 'feet', 'add', '6', 'circ']));
+    expect(view).toMatchObject({
+      mode: 'entry',
+      contextText: 'Expression',
+      expressionText: '2′ + 6″',
+      valueLabel: undefined,
+      progressText: undefined,
+      guidanceText: 'Tap = to calculate, or choose another operator to continue.',
+    });
+  });
+
+  it('keeps storage overlays distinct from colliding HVAC result labels', () => {
+    const offset = run([
+      '1', '0', 'feet', 'run',
+      '5', 'feet', 'rise',
+      '7', 'feet', 'conv', '4',
+      'conv', 'left',
+    ]);
+    expect(calculatorExpressionView(run(['conv', '4'], offset))).toMatchObject({
+      contextText: 'Stored values',
+      valueLabel: 'Stored in register A',
+      progressText: undefined,
+    });
+  });
+
+  it('does not let percent entry mode leak into stored or calculated results', () => {
+    const percent = ['5', '0', 'conv', 'add'] as KeyId[];
+    for (const suffix of [
+      ['mplus'],
+      ['conv', '1'],
+      ['conv', '4'],
+    ] as KeyId[][]) {
+      expect(calculatorExpressionView(run([...percent, ...suffix])).valueText).not.toContain('%');
+    }
+
+    const fan = calculatorExpressionView(run([
+      '5', '0', 'conv', 'add', 'conv', '4',
+      '1', '0', '0', 'conv', '7',
+      '2', '5', 'conv', '5',
+      'conv', 'run',
+    ]));
+    expect(fan.valueText).toContain('RPM');
+    expect(fan.valueText).not.toContain('%');
+  });
+
+  it('warns before an unavailable irregular-pitch recall instead of promising success', () => {
+    expect(calculatorExpressionView(run(['recall', 'conv']))).toMatchObject({
+      guidanceTone: 'warning',
+      guidanceText: 'No irregular pitch is stored. Tap On/C, enter an irregular pitch, then tap Conv + Hip/V to store it.',
+    });
+
+    const stored = run(['8', 'inch', 'conv', 'hip', 'on', 'recall', 'conv']);
+    expect(calculatorExpressionView(stored)).toMatchObject({
+      guidanceTone: 'next',
+      guidanceText: 'Tap Hip/V to recall the stored irregular pitch.',
+    });
+  });
+
+  it('never relabels an HVAC result as another tool while Conv is active', () => {
+    const offset = run([
+      '1', '0', 'feet', 'run',
+      '5', 'feet', 'rise',
+      '7', 'feet', 'conv', '4',
+      'conv', 'left', 'conv',
+    ]);
+    expect(calculatorExpressionView(offset)).toMatchObject({
+      mode: 'entry',
+      contextText: 'Convert mode',
+      valueLabel: undefined,
+      progressText: undefined,
+      guidanceText: 'Choose a key to use its yellow function.',
+    });
+  });
+
+  it('does not promise Law of Cosines for invalid stored sides', () => {
+    const invalid = calculatorExpressionView(run([
+      '3', 'conv', 'subtract', 'conv', '4',
+      '4', 'conv', 'subtract', 'conv', '5',
+      '5', 'conv', 'subtract', 'conv', '6',
+    ]));
+    expect(invalid.guidanceText).toBe(
+      'A, B, and C are stored, but they must be positive sides that form a valid triangle before using Conv + 9.',
+    );
+    expect(invalid.guidanceTone).toBe('warning');
+
+    const fieldValue = calculatorExpressionView(run([
+      '1', '0', '0', 'conv', '0', 'conv', 'subtract', 'conv', '4',
+      '4', 'conv', 'subtract', 'conv', '5',
+      '5', 'conv', 'subtract', 'conv', '6',
+    ]));
+    expect(fieldValue.guidanceText).toContain('Replace it with a length or bare number');
+    expect(fieldValue.guidanceTone).toBe('warning');
+  });
+
+  it('names the exact next key for segment and stored-pitch workflows', () => {
+    expect(calculatorExpressionView(run([
+      '1', '0', 'feet', 'conv', 'pitch', '3', 'feet', 'run',
+    ])).guidanceText).toBe(
+      'Radius and chord are ready. Tap Rise to calculate the segment rise.',
+    );
+    expect(calculatorExpressionView(run([
+      '1', '0', 'feet', 'conv', 'pitch', '3', 'feet', 'rise',
+    ])).guidanceText).toBe(
+      'Radius and rise are ready. Tap Run to calculate the segment chord.',
+    );
+    expect(calculatorExpressionView(run([
+      '7', 'inch', 'pitch', 'on', 'on', '4', 'feet', 'run',
+    ])).guidanceText).toBe(
+      'Run and stored Pitch are ready. Tap Rise or Diagonal to solve the triangle, or use Hip/V, Jack, or Stair.',
+    );
+    expect(calculatorExpressionView(run([
+      '3', 'feet', 'run', '1', '0', 'feet', 'conv', 'pitch',
+    ])).guidanceText).toBe(
+      'Radius and chord are ready. Tap Rise to calculate the segment rise.',
+    );
+
+    const segmentRise = run([
+      '1', '0', 'feet', 'conv', 'pitch', '3', 'feet', 'run', 'rise',
+    ]);
+    expect(calculatorExpressionView(segmentRise).guidanceText).toBe(
+      'Segment rise is calculated. Tap Run to show the matching chord, or enter a new value.',
+    );
+    const segmentChord = run([
+      '1', '0', 'feet', 'conv', 'pitch', '3', 'feet', 'rise', 'run',
+    ]);
+    expect(calculatorExpressionView(segmentChord).guidanceText).toBe(
+      'Segment chord is calculated. Tap Rise to show the matching segment rise, or enter a new value.',
+    );
+  });
+
+  it('distinguishes memory storage from recall in the named equation', () => {
+    const stored = run(['4', '2', 'conv', '1']);
+    expect(calculatorExpressionView(stored)).toMatchObject({
+      contextText: 'Memory',
+      valueLabel: 'Stored in M1',
+    });
+
+    const recalled = run(['on', 'recall', '1'], stored);
+    expect(calculatorExpressionView(recalled)).toMatchObject({
+      contextText: 'Memory',
+      valueLabel: 'Recalled M1',
+    });
+
+    const cleared = run(['0', 'conv', '1'], recalled);
+    expect(calculatorExpressionView(cleared)).toMatchObject({
+      contextText: 'Memory',
+      valueLabel: 'Cleared M1',
+    });
+
+    const empty = run(['on', 'recall', '1'], cleared);
+    expect(calculatorExpressionView(empty)).toMatchObject({
+      contextText: 'Memory',
+      valueLabel: 'M1 is empty',
+      valueText: 'Recall returns 0',
+      valueSymbol: undefined,
+    });
+
+    const running = run(['5', 'mplus']);
+    const recalledAndCleared = run(['recall', 'recall'], running);
+    expect(calculatorExpressionView(recalledAndCleared)).toMatchObject({
+      contextText: 'Memory',
+      valueLabel: 'Recalled and cleared running memory',
+      valueText: '5',
+    });
   });
 
   it('keeps the KPA result precision shown by the engine', () => {
     expect(calculatorExpressionView(run([
       '5', '0', '0', 'conv', '0', '0', '0', '0',
     ]))).toMatchObject({
-      contextText: 'KPA',
-      expressionText: '≈147928.99',
-      progressText: '4/5 · 0 for next',
-      ariaText: 'KPA. approximately 147928.99. 4/5 · 0 for next',
+      contextText: 'Air velocity / pressure',
+      expressionText: '≈147928.99 Pa',
+      valueLabel: 'Velocity pressure',
+      progressText: '4 of 5',
+      ariaText: 'Air velocity / pressure. Velocity pressure approximately 147928.99 Pa. 4 of 5. Tap VP/FPM / 0 to show Original entry.',
     });
   });
 
@@ -659,7 +1169,7 @@ describe('modern calculator expression display', () => {
     const completed = run(['2', 'add', '3', 'equals']);
     expect(calculatorExpressionView(run(['conv', 'left'], completed))).toMatchObject({
       expressionText: '2 + 3',
-      resultText: 'Complete the entry',
+      resultText: 'Offset needs valid inputs',
       resultSymbol: undefined,
     });
   });
@@ -768,18 +1278,18 @@ describe('modern calculator expression display', () => {
       '3', 'run', '4', 'rise', 'conv', 'fraction', 'pitch',
     ]));
     expect(pitchAfterStoredSides).toMatchObject({
-      expressionText: '4 × 10^…',
+      expressionText: '4″ × 10^…',
       resultText: 'Check the exponent',
-      contextText: 'Check entry',
+      contextText: 'Pitch — check entry',
     });
 
     const pitchAfterTrig = calculatorExpressionView(run([
-      '4', 'rise', '4', 'run', 'tan', 'conv', 'fraction', 'pitch',
+      '4', 'tan', 'conv', 'fraction', 'pitch',
     ]));
     expect(pitchAfterTrig).toMatchObject({
       expressionText: 'tan(4) × 10^…',
       resultText: 'Check the exponent',
-      contextText: 'Check entry',
+      contextText: 'Pitch — check entry',
     });
 
     const hvacKeys: KeyId[][] = [
@@ -804,7 +1314,7 @@ describe('modern calculator expression display', () => {
       ]))).toMatchObject({
         expressionText: '4 × 10^…',
         resultText: 'Check the exponent',
-        contextText: 'Check entry',
+        contextText: expect.stringMatching(/check entry$/),
       });
     }
 
@@ -883,7 +1393,8 @@ describe('modern calculator expression display', () => {
       expressionText: '2 + 3',
       resultText: '5',
     });
-    expect(calculatorExpressionView(run(['conv', 'equals'], completed)).contextText).toBe('Preferences');
+    expect(calculatorExpressionView(run(['conv', 'equals'], completed)).contextText)
+      .toBe('Preference 1 of 13 · Fraction resolution');
   });
 
   it('does not leave a stale CONV label when conversion mode is toggled off', () => {
@@ -1027,7 +1538,7 @@ describe('modern calculator expression display', () => {
       expressionText: '≈0.333333 × 3',
       resultText: '1',
       resultSymbol: '≈',
-      ariaText: 'approximately 0.333333 times 3 approximately 1',
+      ariaText: 'approximately 0.333333 times 3 approximately 1. Continue with an operator, conversion, or new calculation.',
     });
   });
 
@@ -1099,7 +1610,7 @@ describe('modern calculator expression display', () => {
       expressionText: '2 × (3 + 4)',
       resultText: '7',
       resultSymbol: undefined,
-      ariaText: '2 times (3 plus 4). Current group 7',
+      ariaText: '2 times (3 plus 4). Current group 7. Continue with an operator or tap =.',
     });
   });
 
@@ -1139,9 +1650,9 @@ describe('modern calculator expression display', () => {
     ]);
     const velocity = run(['conv', '0'], approximate);
     expect(calculatorExpressionView(velocity)).toMatchObject({
-      expressionText: '≈4005',
-      progressText: '1/5 · 0 for next',
-      ariaText: 'FPM. approximately 4005. 1/5 · 0 for next',
+      expressionText: '≈4005 FPM',
+      progressText: '1 of 5',
+      ariaText: 'Air velocity / pressure. Air velocity approximately 4005 FPM. 1 of 5. Tap VP/FPM / 0 to show Velocity pressure.',
     });
     expect(calculatorExpressionView(run(['multiply', '1', 'equals'], velocity)).resultSymbol)
       .toBe('≈');
@@ -1239,5 +1750,184 @@ describe('modern calculator expression display', () => {
       '8 × 10',
       { exponent: '≈−1' },
     ]);
+  });
+
+  it('keeps semantic HVAC units through memory, recall, and arithmetic reuse', () => {
+    const cases: Array<{ keys: KeyId[]; operand: RegExp; stored: RegExp }> = [
+      {
+        keys: ['6', 'inch', 'pitch', 'pitch', 'pitch'],
+        operand: /50 \[% grade\] \+$/,
+        stored: /50% grade/,
+      },
+      {
+        keys: [
+          '1', '2', '5', '0', 'conv', '4',
+          '1', '4', '0', '0', 'conv', '7',
+          '7', '5', '0', 'conv', '5',
+          'conv', 'run',
+        ],
+        operand: /840 RPM \+$/,
+        stored: /840 RPM/,
+      },
+      {
+        keys: ['5', '0', '0', 'conv', '0', '0'],
+        operand: /in\. w\.g\. \+$/,
+        stored: /in\. w\.g\./,
+      },
+    ];
+
+    for (const sample of cases) {
+      const stored = run(['conv', '1'], run(sample.keys));
+      expect(calculatorExpressionView(stored).valueText).toMatch(sample.stored);
+      const recalled = run(['on', 'recall', '1'], stored);
+      expect(calculatorExpressionView(run(['add'], recalled)).expressionText)
+        .toMatch(sample.operand);
+    }
+  });
+
+  it('shows empty shared registers without a false equality', () => {
+    expect(calculatorExpressionView(run(['recall', '4']))).toMatchObject({
+      contextText: 'Stored values',
+      valueLabel: 'Register A is empty',
+      valueText: 'Recall returns 0',
+      valueSymbol: undefined,
+    });
+
+    expect(calculatorExpressionView(run(['recall', 'recall']))).toMatchObject({
+      valueLabel: 'Running memory was empty',
+      valueText: 'Recall returns 0',
+      valueSymbol: undefined,
+    });
+
+    expect(calculatorExpressionView(run(['4', '2', 'conv', 'recall']))).toMatchObject({
+      valueLabel: 'Previous running memory was empty',
+      valueText: 'Swap returns 0',
+      valueSymbol: undefined,
+    });
+  });
+
+  it('distinguishes storing from recalling field settings', () => {
+    const storedJack = run(['1', '6', 'inch', 'jack']);
+    expect(calculatorExpressionView(storedJack)).toMatchObject({
+      contextText: 'Jack settings',
+      valueLabel: 'Stored on-center spacing',
+    });
+    expect(calculatorExpressionView(run(['on', 'recall', 'jack'], storedJack))).toMatchObject({
+      contextText: 'Jack settings',
+      valueLabel: 'Recalled on-center spacing',
+    });
+
+    const storedRiser = run(['7', 'decimal', '5', 'inch', 'conv', 'stair']);
+    expect(calculatorExpressionView(storedRiser)).toMatchObject({
+      contextText: 'Stair settings',
+      valueLabel: 'Stored desired riser height',
+    });
+    expect(calculatorExpressionView(run(['on', 'recall', 'stair'], storedRiser))).toMatchObject({
+      contextText: 'Stair settings',
+      valueLabel: 'Recalled desired riser height',
+    });
+  });
+
+  it('warns instead of advertising impossible triangle and segment solves', () => {
+    expect(calculatorExpressionView(run([
+      '3', 'conv', 'subtract', 'run', '4', 'rise',
+    ]))).toMatchObject({
+      guidanceTone: 'warning',
+      guidanceText: expect.stringContaining('positive'),
+    });
+    expect(calculatorExpressionView(run(['5', 'run', '3', 'diag']))).toMatchObject({
+      guidanceTone: 'warning',
+      guidanceText: expect.stringContaining('incompatible'),
+    });
+    expect(calculatorExpressionView(run([
+      '1', '0', 'feet', 'conv', 'pitch',
+      '2', '5', 'feet', 'run',
+    ]))).toMatchObject({
+      guidanceTone: 'warning',
+      guidanceText: expect.stringContaining('cannot exceed'),
+    });
+    expect(calculatorExpressionView(run([
+      '1', '0', 'feet', 'conv', 'pitch',
+      '2', '1', 'feet', 'rise',
+    ]))).toMatchObject({
+      guidanceTone: 'warning',
+      guidanceText: expect.stringContaining('cannot exceed'),
+    });
+  });
+
+  it('preserves Stair warnings through modifiers, conversions, and storage overlays', () => {
+    const stair = run([
+      '1', '0', 'feet', '1', 'inch', 'rise',
+      '1', '5', 'feet', '5', 'inch', 'run',
+      'stair',
+    ]);
+    expect(stair.display.note).toContain('more than 10%');
+    for (const overlay of [
+      ['conv'],
+      ['recall'],
+      ['feet'],
+      ['mplus'],
+      ['conv', '4'],
+    ] as KeyId[][]) {
+      expect(calculatorExpressionView(run(overlay, stair))).toMatchObject({
+        guidanceTone: 'warning',
+        guidanceText: expect.stringContaining('more than 10%'),
+      });
+    }
+  });
+
+  it('advances special cycles after converted-unit display overlays', () => {
+    expect(run(['6', 'circ', 'conv', 'meter', 'circ']).display.label).toBe('CIRC');
+
+    const jack = run([
+      '7', 'inch', 'pitch', '4', 'feet', 'run',
+      'jack', 'jack', 'conv', 'meter', 'jack',
+    ]);
+    expect(jack.display.label).toBe('JK2');
+    expect(jack.preferences.onCenter).toBe(16);
+    expect(jack.onCenterStored).toBe(false);
+  });
+
+  it('uses neutral physical and Trade names in special-key recovery', () => {
+    const arc = calculatorReducer(initialCalculatorState(), {
+      type: 'press-converted',
+      key: 'circ',
+    });
+    expect(calculatorExpressionView(arc).guidanceText).toContain('Arc / Conv+Circ');
+
+    const segment = calculatorReducer(initialCalculatorState(), {
+      type: 'press-converted',
+      key: 'pitch',
+    });
+    expect(calculatorExpressionView(segment).guidanceText).toContain('Seg Rad / Conv+Pitch');
+  });
+
+  it('explains unsupported Recall keys instead of blaming missing geometry', () => {
+    expect(calculatorExpressionView(run(['recall', 'circ'])).guidanceText)
+      .toContain('choose M+, M1, M2, M3, A');
+    expect(calculatorExpressionView(run(['recall', 'conv', 'circ'])).guidanceText)
+      .toContain('Hip/V recalls the stored irregular pitch');
+  });
+
+  it('keeps an unfinished outer group separate from its evaluated inner result', () => {
+    expect(calculatorExpressionView(run([
+      'left', '2', 'add', 'left', '3', 'multiply', '4', 'right',
+    ]))).toMatchObject({
+      contextText: 'Current group',
+      expressionText: '(2 + (3 × 4)',
+      resultText: '12',
+      resultSymbol: undefined,
+      guidanceText: 'Continue with an operator, close the outer group, or tap =.',
+    });
+  });
+
+  it('names every preference and its position in the 13-screen review', () => {
+    const tread = run(['conv', 'equals', 'equals', 'equals', 'equals']);
+    expect(calculatorExpressionView(tread).contextText)
+      .toBe('Preference 4 of 13 · Tread width');
+
+    const floor = run(['equals', 'equals'], tread);
+    expect(calculatorExpressionView(floor).contextText)
+      .toBe('Preference 6 of 13 · Floor thickness');
   });
 });

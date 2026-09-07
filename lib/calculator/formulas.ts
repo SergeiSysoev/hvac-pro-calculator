@@ -361,9 +361,13 @@ export function jackRafterResults(
     if (jackCount > MAX_ENUMERATED_MEMBERS) throw new CalcError('0-fL0');
     const values: NamedResult[] = [];
     for (let index = 1; index <= jackCount; index += 1) {
-      const horizontal = preferences.jackOrder === 'ascending'
-        ? Math.min(sideRun, index * decrement)
-        : Math.max(0, sideRun - index * decrement);
+      // Ascending is the exact reverse of the same physical Jack set shown in
+      // descending order. It must not introduce the full common-rafter
+      // endpoint, which is not a Jack (UG4090E-E, pp. 85 and 103).
+      const descendingIndex = preferences.jackOrder === 'ascending'
+        ? jackCount - index + 1
+        : index;
+      const horizontal = Math.max(0, sideRun - descendingIndex * decrement);
       values.push({
         label: `${prefix}${index}`,
         value: lengthValue(horizontal * Math.sqrt(1 + sideSlope ** 2)),
@@ -482,10 +486,10 @@ export function stairResults(
   const opening = (preferences.headroom + preferences.floorThickness) * roundedTread / roundedRiser;
   const stringer = treads * Math.hypot(roundedRiser, roundedTread);
   const incline = Math.atan2(roundedRiser, roundedTread) * 180 / Math.PI;
-  const desiredRatio = preferences.desiredRiser / preferences.treadWidth;
-  const actualRatio = roundedRiser / roundedTread;
-  const warningNote = Math.abs(actualRatio / desiredRatio - 1) > 0.1
-    ? 'Steep/atypical stair ratio'
+  const preferredSlope = preferences.desiredRiser / preferences.treadWidth;
+  const actualSlope = roundedRiser / roundedTread;
+  const warningNote = Math.abs(actualSlope / preferredSlope - 1) > 0.1
+    ? 'Calculated stair slope differs from the preferred rise/run ratio by more than 10%'
     : undefined;
 
   const results: NamedResult[] = [

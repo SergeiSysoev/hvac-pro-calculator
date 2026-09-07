@@ -255,6 +255,10 @@ describe('physical keypad workflow', () => {
     ]);
     expect(state.current?.amount).toBeCloseTo(840, 8);
     expect(state.display.label).toContain('RPMn');
+    expect(state.current?.semanticKind).toBe('rpm');
+
+    const stored = run(['conv', '1'], state);
+    expect(stored.memory.m1?.semanticKind).toBe('rpm');
   });
 
   it('keeps raw Fan Law registers scalar after dimensional calculations', () => {
@@ -348,14 +352,19 @@ describe('physical keypad workflow', () => {
     expect(total.current?.amount).toBeCloseTo(135.9458, 4);
   });
 
-  it('solves a unitless Law of Cosines triangle without inventing length units', () => {
+  it('treats bare Law of Cosines sides as inches without mutating shared registers', () => {
     const angleA = run([
       '3', 'conv', '4', '4', 'conv', '5', '5', 'conv', '6', 'conv', '9',
     ]);
     const area = run(['9', '9', '9'], angleA);
     expect(angleA.current?.amount).toBeCloseTo(36.86989765, 8);
     expect(area.display.label).toBe('AREA');
-    expect(area.current).toMatchObject({ amount: 6, power: 0, unit: 'auto' });
+    expect(area.current).toMatchObject({ amount: 6, power: 2, unit: 'sq-in' });
+    expect(area.registers).toMatchObject({
+      a: { amount: 3, power: 0 },
+      b: { amount: 4, power: 0 },
+      c: { amount: 5, power: 0 },
+    });
   });
 
   it('uses Standard mixed-unit output rules for Law of Cosines and Column volume', () => {
@@ -374,12 +383,53 @@ describe('physical keypad workflow', () => {
     ]);
     expect(column.display).toMatchObject({ label: 'COL', valueText: '19.24226', unitText: 'CU FEET' });
 
-    const incompatible = run([
+    const mixedBareInches = run([
       '1', '0', '0', 'conv', 'meter', 'circ',
       '1', '0', '0', 'rise',
       'conv', 'right',
     ]);
-    expect(incompatible.display.label).toBe('ERROR');
+    expect(mixedBareInches.display.label).toBe('COL');
+    expect(mixedBareInches.current).toMatchObject({ power: 3 });
+    expect(mixedBareInches.current?.amount).toBeCloseTo(
+      Math.PI * (50 / 25.4) ** 2 * 100,
+      8,
+    );
+  });
+
+  it('keeps the authoritative radius unit when another segment dimension is entered later', () => {
+    const circle = run([
+      '1', '0', '0', '0', 'conv', 'meter', 'conv', 'pitch',
+      '3', '0', 'run',
+      'circ',
+    ]);
+
+    expect(circle.circleRadiusUnit).toBe('mm');
+    expect(circle.circleResultUnit).toBe('in');
+    expect(circle.display).toMatchObject({ label: 'DIA', unitText: 'MM' });
+    expect(circle.current?.amount).toBeCloseTo(2000 / 25.4, 10);
+  });
+
+  it('keeps the stored Column height unit after the shared Rise register is evicted', () => {
+    const retained = run([
+      '1', '0', '0', '0', 'conv', 'meter', 'rise',
+      '3', '0', 'inch', 'run',
+      '1', '0', 'inch', 'conv', 'pitch',
+      'conv', 'right',
+    ]);
+    const evicted = run([
+      '1', '0', '0', '0', 'conv', 'meter', 'rise',
+      '3', '0', 'inch', 'run',
+      '5', '0', 'inch', 'diag',
+      '1', '0', 'inch', 'conv', 'pitch',
+      'conv', 'right',
+    ]);
+
+    expect(retained.circleHeightUnit).toBe('mm');
+    expect(evicted.triangleUnits.y).toBeUndefined();
+    expect(evicted.circleHeightUnit).toBe('mm');
+    expect(retained.display).toMatchObject({ label: 'COL', unitText: 'CU FEET' });
+    expect(evicted.display).toMatchObject({ label: 'COL', unitText: 'CU FEET' });
+    expect(evicted.current?.amount).toBeCloseTo(retained.current!.amount, 10);
   });
 
   it('preserves millimeter and inch formats in field geometry', () => {
@@ -418,6 +468,24 @@ describe('physical keypad workflow', () => {
 
     expect(metricLast.display).toMatchObject({ valueText: '43.3013', unitText: 'MM' });
     expect(imperialLast.display.unitText).toBe('FEET        INCH');
+  });
+
+  it('keeps a derived mixed-unit Rise in its displayed metric family for Column volume', () => {
+    const solvedRise = run([
+      '1', '0', '0', '0', 'conv', 'meter', 'circ',
+      '1', 'feet', 'run',
+      '1', '0', '0', '0', 'conv', 'meter', 'diag',
+      'rise',
+    ]);
+    const column = run(['conv', 'right'], solvedRise);
+
+    expect(solvedRise.display).toMatchObject({ label: 'Y', unitText: 'MM' });
+    expect(solvedRise.circleHeightUnit).toBe('mm');
+    expect(column.display).toMatchObject({ label: 'COL', unitText: 'CU MM' });
+    expect(column.current?.amount).toBeCloseTo(
+      Math.PI * (500 / 25.4) ** 2 * solvedRise.triangle.y!,
+      8,
+    );
   });
 
   it('converts VP to FPM with Conv + 0', () => {
@@ -486,6 +554,64 @@ describe('physical keypad workflow', () => {
       valueText: '7',
       unitText: 'INCH',
     });
+  });
+
+  it('reuses a percent-grade result without multiplying it by 100 again', () => {
+    const grade = run(['7', 'inch', 'pitch', 'pitch', 'pitch']);
+    expect(grade.display.label).toBe('%GRD');
+    expect(grade.current?.amount).toBeCloseTo(700 / 12, 10);
+    expect(grade.current?.semanticKind).toBe('percent-grade');
+
+    const repeated = run(['equals', 'pitch'], grade);
+    expect(repeated.display.label).toBe('%GRD');
+    expect(repeated.current?.amount).toBeCloseTo(700 / 12, 10);
+
+    const irregular = run(['equals', 'conv', 'hip'], grade);
+    expect(irregular.display.label).toBe('IPCH');
+    expect(irregular.current?.amount).toBeCloseTo(7, 10);
+  });
+
+  it('keeps ordinary percent transient while allowing immediate percent-grade entry', () => {
+    const percent = run(['5', '0', 'conv', 'add']);
+    expect(percent.current).toMatchObject({ amount: 0.5, power: 0 });
+    expect(percent.current?.semanticKind).toBeUndefined();
+    expect(percent.inputKind).toBe('percent');
+
+    const pitch = run(['pitch'], percent);
+    expect(pitch.display.label).toBe('%GRD');
+    expect(pitch.current?.amount).toBeCloseTo(50, 10);
+    expect(pitch.permanentPitchSlope).toBeCloseTo(0.5, 10);
+
+    const completed = run(['equals'], percent);
+    expect(completed.current?.amount).toBeCloseTo(0.5, 10);
+    expect(completed.current?.semanticKind).toBeUndefined();
+    expect(completed.inputKind).toBeUndefined();
+
+    const stored = run(['conv', '1'], percent);
+    const cumulative = run(['mplus'], percent);
+    expect(stored.memory.m1?.semanticKind).toBeUndefined();
+    expect(cumulative.memory.cumulative?.semanticKind).toBeUndefined();
+  });
+
+  it('does not reuse HVAC field scalars as implicit inches', () => {
+    const grade = run(['7', 'inch', 'pitch', 'pitch', 'pitch', 'equals']);
+    const fpm = run(['0', 'decimal', '0', '4', '9', 'conv', '0', 'equals']);
+
+    expect(run(['circ'], grade).display.valueText).toBe('TYP Error');
+    expect(run(['circ'], fpm).display.valueText).toBe('TYP Error');
+  });
+
+  it('ends a velocity cycle when its scalar is explicitly assigned a length unit', () => {
+    const fpm = run(['0', 'decimal', '0', '4', '9', 'conv', '0']);
+    const millimeters = run(['conv', 'meter'], fpm);
+    expect(fpm.display.label).toBe('FPM');
+    expect(millimeters.sequence).toBeUndefined();
+    expect(millimeters.current).toMatchObject({ power: 1, unit: 'mm' });
+
+    const freshZero = run(['0'], millimeters);
+    expect(freshZero.sequence).toBeUndefined();
+    expect(freshZero.display.label).toBe('ENTRY');
+    expect(freshZero.entry).toBe('0');
   });
 
   it('recalls the stored riser without blocking the next Stair calculation', () => {
@@ -600,8 +726,9 @@ describe('physical keypad workflow', () => {
     expect(pitch.display.label).toBe('∠θ');
     expect(pitch.current?.amount).toBeCloseTo(Math.PI, 10);
 
-    const invalidCircle = run(['1', '0', 'inch', 'circ', 'pi', 'circ']);
-    expect(invalidCircle.display).toMatchObject({ label: 'ERROR', valueText: 'DIM Error' });
+    const bareConstantCircle = run(['1', '0', 'inch', 'circ', 'pi', 'circ']);
+    expect(bareConstantCircle.display).toMatchObject({ label: 'DIA', unitText: 'INCH' });
+    expect(bareConstantCircle.current).toMatchObject({ amount: Math.PI, power: 1 });
   });
 
   it('converts a calculated angle to D:M:S and back', () => {
@@ -679,6 +806,40 @@ describe('physical keypad workflow', () => {
     expect(cumulative.memory.cumulative).toBeUndefined();
     expect(negative.current?.amount).toBeCloseTo(8e-14, 20);
     expect(negative.display.valueText).toBe('8.00000e-14');
+  });
+
+  it('uses recalled-and-cleared and swapped running memory as the next live operand', () => {
+    const running = run(['1', '0', '0', 'mplus', 'on']);
+    const recalledAndCleared = run(['recall', 'recall'], running);
+    const swapped = run([
+      '6', 'inch', 'circ', 'conv', 'recall',
+    ], running);
+
+    expect(recalledAndCleared).toMatchObject({
+      current: { amount: 100, power: 0 },
+      inputActive: true,
+      sequence: undefined,
+    });
+    expect(recalledAndCleared.memory.cumulative).toBeUndefined();
+    expect(run(['circ'], recalledAndCleared)).toMatchObject({
+      display: { label: 'DIA', valueText: '100', unitText: 'INCH' },
+      circle: { diameter: 100 },
+    });
+
+    expect(swapped).toMatchObject({
+      current: { amount: 100, power: 0 },
+      inputActive: true,
+      sequence: undefined,
+      memory: { cumulative: { amount: 6, power: 1 } },
+    });
+    expect(run(['circ'], swapped)).toMatchObject({
+      display: { label: 'DIA', valueText: '100', unitText: 'INCH' },
+      circle: { diameter: 100 },
+    });
+    expect(run(['run'], swapped)).toMatchObject({
+      display: { label: 'X', valueText: '100', unitText: 'INCH' },
+      triangle: { x: 100 },
+    });
   });
 
   it('rejects a recalled dimensional exponent', () => {
@@ -769,6 +930,16 @@ describe('physical keypad workflow', () => {
     expect(state.current?.amount).toBeCloseTo(31.749, 3);
   });
 
+  it('rejects zero and negative direct segment radii', () => {
+    const zero = run(['0', 'conv', 'pitch']);
+    const negative = run(['5', 'subtract', '8', 'equals', 'conv', 'pitch']);
+
+    expect(zero.display.valueText).toBe('ENT Error');
+    expect(zero.circle.radius).toBeUndefined();
+    expect(negative.display.valueText).toBe('ENT Error');
+    expect(negative.circle.radius).toBeUndefined();
+  });
+
   it('recomputes segment radius from a fresh chord-and-rise pair', () => {
     const oldRadius = run(['2', '4', 'inch', 'conv', 'pitch']);
     const freshRadius = run([
@@ -778,13 +949,18 @@ describe('physical keypad workflow', () => {
     expect(freshRadius.current?.amount).toBeCloseTo(16.25, 10);
   });
 
-  it('does not mix raw segment sides with a dimensioned radius', () => {
+  it('treats raw segment sides as inches alongside a dimensioned radius', () => {
     const state = run([
       '3', '0', 'run', '1', '0', 'rise',
       '1', '0', '0', '0', 'conv', 'meter', 'conv', 'pitch',
       'run',
     ]);
-    expect(state.display.label).toBe('ERROR');
+    expect(state.display.label).toBe('CORD');
+    expect(state.current).toMatchObject({ power: 1 });
+    expect(state.current?.amount).toBeCloseTo(
+      2 * Math.sqrt(2 * (1000 / 25.4) * 10 - 10 ** 2),
+      8,
+    );
   });
 
   it('replaces stale arc degrees when a new arc length is entered', () => {
@@ -991,6 +1167,29 @@ describe('physical keypad workflow', () => {
     expect(wrapped.display.label).toBe('DIA');
   });
 
+  it('can reuse a stored Circle diameter as the first value in a new group', () => {
+    const grouped = run(['6', 'circ', 'left']);
+    expect(grouped.sequence).toBeUndefined();
+    const reused = run(['circ'], grouped);
+    expect(reused.display.label).toBe('DIA');
+    expect(reused.current?.amount).toBe(6);
+    expect(reused.parenthesisDepth).toBe(1);
+  });
+
+  it('clears a stale Offset cycle when a new triangle value is stored', () => {
+    const offset = run([
+      '1', '0', 'feet', 'run',
+      '5', 'feet', 'rise',
+      '7', 'feet', 'conv', '4',
+      'conv', 'left',
+    ]);
+    const newRun = run(['9', 'feet', 'run'], offset);
+    expect(newRun.sequence).toBeUndefined();
+    const group = run(['left'], newRun);
+    expect(group.sequence).toBeUndefined();
+    expect(group.display.label).toBe('(1');
+  });
+
   it('uses a recalled dimension as a new Circle input instead of advancing an old cycle', () => {
     const stored = run(['2', '0', 'inch', 'conv', '1', '1', '0', 'inch', 'circ']);
     const recalled = run(['recall', '1', 'circ'], stored);
@@ -1057,7 +1256,7 @@ describe('physical keypad workflow', () => {
     expect(state.triangle.x).toBe(86);
   });
 
-  it('solves documented raw-number triangle workflows without dimensional labels', () => {
+  it('solves documented raw-number triangle workflows as inches', () => {
     const angle = run(['1', '5', 'run', '3', '5', 'diag', 'pitch']);
     expect(angle.current?.amount).toBeCloseTo(64.62307, 5);
     expect(angle.current?.angle).toBe(true);
@@ -1065,10 +1264,11 @@ describe('physical keypad workflow', () => {
 
     const runResult = run(['1', '8', 'rise', '2', '0', 'pitch', 'run']);
     expect(runResult.current?.amount).toBeCloseTo(49.45459, 5);
-    expect(runResult.current?.power).toBe(0);
+    expect(runResult.current?.power).toBe(1);
+    expect(runResult.display.unitText).toBe('INCH');
   });
 
-  it('keeps fresh raw triangle inputs unitless after a prior dimensional result', () => {
+  it('keeps fresh bare triangle inputs in inches after a prior dimensional result', () => {
     const state = run([
       '1', '0', 'feet', 'run', 'on',
       '1', '8', 'rise',
@@ -1076,8 +1276,8 @@ describe('physical keypad workflow', () => {
       'run',
     ]);
     expect(state.current?.amount).toBeCloseTo(49.45459, 5);
-    expect(state.current?.power).toBe(0);
-    expect(state.display.unitText).toBe('');
+    expect(state.current?.power).toBe(1);
+    expect(state.display.unitText).toBe('INCH');
   });
 
   it('starts solved Pitch at slope for Rise+Run and at angle for Run+Diagonal', () => {
@@ -1144,7 +1344,7 @@ describe('physical keypad workflow', () => {
     );
   });
 
-  it('solves all-raw offset values and keeps them unitless', () => {
+  it('solves all-bare offset values in inches', () => {
     const state = run([
       ...digits('2045'), 'run',
       ...digits('573'), 'rise',
@@ -1153,18 +1353,69 @@ describe('physical keypad workflow', () => {
     ]);
     expect(state.display.label).toBe('RAD');
     expect(state.current?.amount).toBeCloseTo(1967.868, 3);
-    expect(state.current?.power).toBe(0);
-    expect(state.display.unitText).toBe('');
+    expect(state.current?.power).toBe(1);
+    expect(state.display.unitText).toBe('INCH');
   });
 
-  it('rejects mixed dimensional and unitless Offset inputs', () => {
+  it('treats bare Offset sides as inches when end A is metric', () => {
     const state = run([
       '2', '0', '4', '5', 'run',
       '5', '7', '3', 'rise',
       '1', '7', '2', '7', 'conv', 'meter', 'conv', '4',
       'conv', 'left',
     ]);
-    expect(state.display).toMatchObject({ label: 'ERROR', valueText: 'DIM Error' });
+    expect(state.display).toMatchObject({ label: 'RAD', unitText: 'MM' });
+    expect(state.current).toMatchObject({ power: 1 });
+    expect(state.current?.amount).toBeCloseTo(1967.868, 3);
+  });
+
+  it('uses inches for Offset results when the dimensional end-A entry is bare', () => {
+    const state = run([
+      '2', '0', '4', '5', 'conv', 'meter', 'run',
+      '5', '7', '3', 'conv', 'meter', 'rise',
+      '7', 'conv', '4',
+      'conv', 'left',
+    ]);
+
+    expect(state.display).toMatchObject({ label: 'RAD', unitText: 'INCH' });
+    expect(state.current).toMatchObject({ power: 1, unit: 'in' });
+    expect(state.current?.amount).toBeCloseTo(1967.868 / 25.4, 3);
+  });
+
+  it('defaults only dimensional special-key entries to inches', () => {
+    const diagonal = run(['8', 'run', '6', 'rise', 'diag']);
+    expect(diagonal.current).toMatchObject({ amount: 10, power: 1 });
+    expect(diagonal.display.unitText).toBe('INCH');
+
+    const circle = run(['1', '0', 'circ']);
+    const circumference = run(['circ'], circle);
+    const area = run(['circ'], circumference);
+    expect(circle.current).toMatchObject({ amount: 10, power: 1 });
+    expect(circumference.current).toMatchObject({ power: 1 });
+    expect(circumference.current?.amount).toBeCloseTo(10 * Math.PI, 10);
+    expect(area.current).toMatchObject({ power: 2, unit: 'sq-in' });
+    expect(area.current?.amount).toBeCloseTo(25 * Math.PI, 10);
+
+    const radius = run(['1', '0', 'conv', 'pitch']);
+    expect(radius.current).toMatchObject({ amount: 10, power: 1 });
+    expect(run(['1', '2', 'run', 'rise'], radius).current)
+      .toMatchObject({ power: 1 });
+
+    const jackSpacing = run(['1', '6', 'jack']);
+    expect(jackSpacing.display.label).toBe('JKOC STORED');
+    expect(jackSpacing.current).toMatchObject({ amount: 16, power: 1 });
+
+    const riser = run(['7', 'decimal', '5', 'conv', 'stair']);
+    expect(riser.display.label).toBe('R-HT STORED');
+    expect(riser.current).toMatchObject({ amount: 7.5, power: 1 });
+
+    const pitch = run(['3', '0', 'pitch']);
+    expect(pitch.current).toMatchObject({ amount: 30, power: 0, angle: true });
+    const sine = run(['3', '0', 'sin']);
+    expect(sine.current).toMatchObject({ power: 0 });
+    expect(sine.current?.amount).toBeCloseTo(0.5, 10);
+    const velocity = run(['0', 'decimal', '0', '4', '9', 'conv', '0']);
+    expect(velocity.current).toMatchObject({ power: 0 });
   });
 
   it('derives the documented Arc cycle from segment radius, chord, and rise', () => {
@@ -1182,6 +1433,112 @@ describe('physical keypad workflow', () => {
     expect(angle.current?.angle).toBe(true);
     expect(arcLength.display.label).toBe('ARC');
     expect(arcLength.current?.amount).toBeCloseTo(229.321, 3);
+  });
+
+  it('reuses a retained Arc angle after replacing only the stored Radius', () => {
+    const storedArc = run([
+      '1', '0', 'conv', 'pitch',
+      '6', '0', 'conv', 'circ',
+      'on',
+      '2', '0', 'conv', 'pitch',
+    ]);
+    const angle = run(['conv', 'circ'], storedArc);
+    const arcLength = run(['circ'], angle);
+
+    expect(storedArc.circle).toMatchObject({ radius: 20, diameter: 40, arcDegrees: 60 });
+    expect(angle.display).toMatchObject({ label: 'ARC', valueText: '60.00', unitText: 'DEG' });
+    expect(arcLength.display).toMatchObject({ label: 'ARC', unitText: 'INCH' });
+    expect(arcLength.current?.amount).toBeCloseTo(20 * Math.PI / 3, 8);
+  });
+
+  it('reuses a retained Arc angle after replacing only the stored Diameter', () => {
+    const replacedDiameter = run([
+      '1', '0', 'conv', 'pitch',
+      '6', '0', 'conv', 'circ',
+      'on',
+      '4', '0', 'circ',
+    ]);
+    const angle = run(['conv', 'circ'], replacedDiameter);
+    const arcLength = run(['circ'], angle);
+
+    expect(replacedDiameter.circle).toMatchObject({ radius: 20, diameter: 40, arcDegrees: 60 });
+    expect(replacedDiameter.segmentInputs).toEqual([]);
+    expect(replacedDiameter.segmentPairReady).toBe(false);
+    expect(angle.display).toMatchObject({ label: 'ARC', valueText: '60.00', unitText: 'DEG' });
+    expect(arcLength.display).toMatchObject({ label: 'ARC', unitText: 'INCH' });
+    expect(arcLength.current?.amount).toBeCloseTo(20 * Math.PI / 3, 8);
+  });
+
+  it('prefers a fresh segment chord over an older retained Arc angle', () => {
+    const storedArcWithFreshChord = run([
+      '1', '0', 'conv', 'pitch',
+      '6', '0', 'conv', 'circ',
+      'on',
+      '2', '0', 'conv', 'pitch',
+      '1', '0', 'run',
+    ]);
+    const angle = run(['conv', 'circ'], storedArcWithFreshChord);
+
+    expect(angle.display).toMatchObject({ label: 'ARC', unitText: 'DEG' });
+    expect(angle.current?.amount).toBeCloseTo(2 * Math.asin(10 / 40) * 180 / Math.PI, 8);
+    expect(angle.current?.amount).toBeCloseTo(28.955024, 6);
+  });
+
+  it('prefers a retained explicit Arc angle over an older segment chord', () => {
+    const explicitArc = run([
+      '1', '0', 'conv', 'pitch',
+      '8', 'run',
+      '6', '0', 'conv', 'circ',
+    ]);
+    const recalledAngle = run(['on', 'conv', 'circ'], explicitArc);
+
+    expect(explicitArc.circle).toMatchObject({ radius: 10, chord: 8, arcDegrees: 60 });
+    expect(explicitArc.segmentInputs).toEqual([]);
+    expect(explicitArc.segmentPairReady).toBe(false);
+    expect(recalledAngle.display).toMatchObject({ label: 'ARC', valueText: '60.00', unitText: 'DEG' });
+    expect(recalledAngle.current?.amount).toBe(60);
+  });
+
+  it('keeps an explicit Arc authoritative through a read-only triangle solve', () => {
+    const explicitArc = run([
+      '3', 'feet', 'run',
+      '4', 'feet', 'rise',
+      '1', '0', 'feet', 'conv', 'pitch',
+      '8', 'feet', 'run',
+      '6', '0', 'conv', 'circ',
+    ]);
+    const triangleDisplay = run(['on', 'pitch'], explicitArc);
+    const recalledAngle = run(['conv', 'circ'], triangleDisplay);
+
+    expect(explicitArc).toMatchObject({
+      segmentInputs: [],
+      segmentPairReady: false,
+      segmentTriangleDirty: false,
+    });
+    expect(triangleDisplay.circle.arcDegrees).toBe(60);
+    expect(recalledAngle.display).toMatchObject({ label: 'ARC', valueText: '60.00', unitText: 'DEG' });
+    expect(recalledAngle.current?.amount).toBe(60);
+  });
+
+  it('keeps a retained exact Arc input exact when only the replacement Radius is approximate', () => {
+    const replacedRadius = run([
+      '1', '0', 'conv', 'pitch',
+      '6', '0', 'conv', 'circ',
+      'on',
+      '1', '0', 'divide', '3', 'equals', 'conv', 'pitch',
+    ]);
+    const angle = run(['conv', 'circ'], replacedRadius);
+    const derivedLength = run(['circ'], angle);
+
+    expect(replacedRadius.circleApproximate.arcDegrees).toBe(false);
+    expect(replacedRadius.circleApproximate.radius).toBe(true);
+    expect(angle).toMatchObject({
+      current: { amount: 60, angle: true },
+      display: { label: 'ARC', valueText: '60.00', unitText: 'DEG' },
+      currentDisplayMetadata: { exactness: 'exact' },
+    });
+    expect(angle.current?.approximate).toBeUndefined();
+    expect(derivedLength.current?.approximate).toBe(true);
   });
 
   it('keeps the latest side unit for the guide mixed-unit arched-window sequence', () => {

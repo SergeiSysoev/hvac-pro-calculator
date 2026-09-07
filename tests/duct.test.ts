@@ -4,6 +4,8 @@ import {
   MAX_RECTANGULAR_FRICTION_DIFFERENCE_PERCENT,
   airflowFromVelocityAndDiameter,
   displayToImperialValue,
+  ductEntryCommaMode,
+  ductFlowRegimeNotice,
   ductFrictionRate,
   ductReynolds,
   equivalentRoundDiameter,
@@ -217,11 +219,27 @@ describe('duct unit and shape helpers', () => {
     expect(imperialToDisplayValue('frictionRate', 1, 'si')).toBeCloseTo(8.1722083333, 9);
   });
 
-  it('parses English thousands separators without corrupting decimal commas', () => {
-    expect(parseDuctEntry('1,000')).toBe(1000);
+  it('rejects an ambiguous lone comma unless the field context resolves it', () => {
+    expect(parseDuctEntry('1,000')).toBeUndefined();
+    expect(parseDuctEntry('1,234', 'decimal')).toBeCloseTo(1.234, 10);
+    expect(parseDuctEntry('1,234', 'grouping')).toBe(1234);
     expect(parseDuctEntry('1,234.5')).toBe(1234.5);
+    expect(parseDuctEntry('1,234,567')).toBe(1234567);
+    expect(parseDuctEntry('1 000')).toBe(1000);
     expect(parseDuctEntry('0,10')).toBeCloseTo(0.1, 10);
     expect(parseDuctEntry('1,2,3')).toBeUndefined();
+    expect(ductEntryCommaMode('frictionRate', 'imperial')).toBe('decimal');
+    expect(ductEntryCommaMode('velocityFpm', 'si')).toBe('decimal');
+    expect(ductEntryCommaMode('airflowCfm', 'imperial')).toBe('grouping');
+    expect(ductEntryCommaMode('diameterIn', 'si')).toBe('grouping');
+  });
+
+  it('describes laminar and transitional flow without mislabeling either regime', () => {
+    expect(ductFlowRegimeNotice(340)).toContain('Laminar flow');
+    expect(ductFlowRegimeNotice(2300)).toContain('Laminar flow');
+    expect(ductFlowRegimeNotice(2300.1)).toContain('Transitional flow');
+    expect(ductFlowRegimeNotice(9999)).toContain('Transitional flow');
+    expect(ductFlowRegimeNotice(10_000)).toBeUndefined();
   });
 
   it.each<DuctField>(['airflowCfm', 'frictionRate', 'velocityFpm', 'diameterIn'])(

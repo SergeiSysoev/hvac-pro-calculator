@@ -12,11 +12,13 @@ export interface KeyFace {
   converted?: boolean;
   tone?: KeyTone;
   action?: KeyAction;
+  powerControl?: boolean;
 }
 
 interface CalculatorKeypadProps {
   keys: KeyFace[];
   modifier?: 'convert' | 'recall' | 'recall-convert';
+  powered: boolean;
   onAction: (action: KeyAction) => void;
   onPress: (key: KeyId, converted?: boolean) => void;
 }
@@ -35,6 +37,7 @@ export function accessibleKeyLabel(face: KeyFace): string {
 export default function CalculatorKeypad({
   keys,
   modifier,
+  powered,
   onAction,
   onPress,
 }: CalculatorKeypadProps) {
@@ -49,6 +52,7 @@ export default function CalculatorKeypad({
             className={`calc-key key-${face.tone ?? 'utility'} ${latched ? 'is-latched' : ''}`}
             aria-label={accessibleKeyLabel(face)}
             aria-pressed={face.key === 'conv' ? latched : undefined}
+            disabled={!powered && !face.powerControl}
             data-key={face.key}
             data-action={face.action}
             onClick={() => {

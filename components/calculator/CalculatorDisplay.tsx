@@ -43,18 +43,28 @@ export default function CalculatorDisplay({
       : '';
   const sizeClass = expressionSizeClass(view.expressionText);
   const accessibleDisplay = [
-    view.ariaText,
+    view.liveText,
     ...accessibleDisplayIndicators(state),
-    state.display.note,
   ].filter(Boolean).join('. ');
+  const guidanceLabel = view.guidanceTone === 'error'
+    ? 'Fix'
+    : view.guidanceTone === 'warning'
+      ? 'Note'
+      : view.guidanceTone === 'next' ? 'Next' : 'Tip';
+  const guidanceDescriptionId = `${variant}-calculator-guidance-description`;
 
   return (
-    <div className="display-stack">
+    <div
+      className="display-stack"
+      role={active ? 'group' : undefined}
+      aria-label={active ? 'Calculator display' : undefined}
+      aria-describedby={active && view.guidanceText ? guidanceDescriptionId : undefined}
+    >
       <div
-        className={`calc-display calc-display-${variant} ${state.display.label === 'ERROR' ? 'is-error' : ''}`}
+        className={`calc-display calc-display-${variant} display-mode-${view.mode} ${state.display.label === 'ERROR' ? 'is-error' : ''}`}
         aria-hidden="true"
       >
-        <div className="expression-meta" aria-hidden="true">
+        <div className="expression-meta">
           <span>{view.contextText}</span>
           <span className="expression-indicators">
             {view.progressText ? <b className="sequence-progress">{view.progressText}</b> : null}
@@ -63,14 +73,41 @@ export default function CalculatorDisplay({
             {modifier ? <b>{modifier}</b> : null}
           </span>
         </div>
-        <div className={`expression-line ${sizeClass} ${view.entryActive ? 'is-entering' : ''}`.trim()}>
-          <ExpressionText className="expression-text" text={view.expressionText} />
-          {view.entryActive ? <span className="expression-caret" aria-hidden="true" /> : null}
-        </div>
-        {view.resultText ? (
-          <div className="expression-result" aria-hidden="true">
-            {view.resultSymbol ? <span className="expression-result-symbol">{view.resultSymbol}</span> : null}
-            <ExpressionText className="expression-result-text" text={view.resultText} />
+
+        {view.mode === 'error' ? (
+          <div className="display-error-content">
+            {view.errorTitle && view.expressionText !== view.errorTitle ? (
+              <ExpressionText className="display-error-expression" text={view.expressionText} />
+            ) : null}
+            <div className="display-error-title">{view.errorTitle ?? 'Check the entry'}</div>
+          </div>
+        ) : view.mode === 'named-result' && view.valueLabel && view.valueText ? (
+          <div className="named-result-equation">
+            <span className="named-result-label">{view.valueLabel}</span>
+            <div className={`named-result-value-line ${sizeClass}`.trim()}>
+              {view.valueSymbol ? <span className="named-result-symbol">{view.valueSymbol}</span> : null}
+              <ExpressionText className="named-result-value" text={view.valueText} />
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className={`expression-line ${sizeClass} ${view.entryActive ? 'is-entering' : ''}`.trim()}>
+              <ExpressionText className="expression-text" text={view.expressionText} />
+              {view.entryActive ? <span className="expression-caret" aria-hidden="true" /> : null}
+            </div>
+            {view.resultText ? (
+              <div className="expression-result">
+                {view.resultSymbol ? <span className="expression-result-symbol">{view.resultSymbol}</span> : null}
+                <ExpressionText className="expression-result-text" text={view.resultText} />
+              </div>
+            ) : null}
+          </>
+        )}
+
+        {view.guidanceText ? (
+          <div className={`display-guidance display-guidance-${view.guidanceTone ?? 'tip'}`}>
+            <strong>{guidanceLabel}</strong>
+            <span>{view.guidanceText}</span>
           </div>
         ) : null}
       </div>
@@ -83,7 +120,15 @@ export default function CalculatorDisplay({
       >
         {accessibleDisplay}
       </span>
-      {state.display.note ? <p className="display-note">{state.display.note}</p> : null}
+      {view.guidanceText ? (
+        <span
+          id={guidanceDescriptionId}
+          className="visually-hidden"
+          aria-hidden={active ? undefined : true}
+        >
+          {`${guidanceLabel}: ${view.guidanceText}`}
+        </span>
+      ) : null}
     </div>
   );
 }

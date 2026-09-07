@@ -71,15 +71,38 @@ function laminarBoundaryFriction(
     diameterIn * (velocityFpm / 1097) ** 2;
 }
 
-export function parseDuctEntry(value: string): number | undefined {
+export type DuctAmbiguousCommaMode = 'reject' | 'decimal' | 'grouping';
+
+export function ductEntryCommaMode(
+  field: DuctField,
+  unitSystem: DuctUnitSystem,
+): DuctAmbiguousCommaMode {
+  if (field === 'frictionRate') return 'decimal';
+  if (field === 'velocityFpm' && unitSystem === 'si') return 'decimal';
+  return 'grouping';
+}
+
+export function parseDuctEntry(
+  value: string,
+  ambiguousCommaMode: DuctAmbiguousCommaMode = 'reject',
+): number | undefined {
   const compact = value.trim().replace(/[\s\u00a0\u202f]/g, '');
   if (!compact) return undefined;
 
   let normalized = compact;
   if (compact.includes(',')) {
-    if (/^[+-]?[1-9]\d{0,2}(?:,\d{3})+(?:\.\d+)?$/.test(compact)) {
+    const ambiguousSingleComma = /^[+-]?[1-9]\d{0,2},\d{3}$/.test(compact);
+    if (
+      /^[+-]?[1-9]\d{0,2}(?:,\d{3}){2,}$/.test(compact)
+      || /^[+-]?[1-9]\d{0,2}(?:,\d{3})+\.\d+$/.test(compact)
+      || (ambiguousSingleComma && ambiguousCommaMode === 'grouping')
+    ) {
       normalized = compact.replaceAll(',', '');
-    } else if (!compact.includes('.') && /^[+-]?(?:\d+,\d*|,\d+)$/.test(compact)) {
+    } else if (
+      !compact.includes('.')
+      && /^[+-]?(?:\d+,\d*|,\d+)$/.test(compact)
+      && (!ambiguousSingleComma || ambiguousCommaMode === 'decimal')
+    ) {
       normalized = compact.replace(',', '.');
     } else {
       return undefined;
@@ -91,6 +114,17 @@ export function parseDuctEntry(value: string): number | undefined {
   }
   const parsed = Number(normalized);
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+export function ductFlowRegimeNotice(reynolds: number): string | undefined {
+  if (!Number.isFinite(reynolds) || reynolds <= 0) return undefined;
+  if (reynolds <= LAMINAR_REYNOLDS_LIMIT) {
+    return 'Laminar flow: the calculation uses f = 64/Re; verify this low-flow application.';
+  }
+  if (reynolds < 10_000) {
+    return 'Transitional flow: results can be sensitive to small changes; verify before use.';
+  }
+  return undefined;
 }
 
 function requirePositive(value: number, label: string): number {

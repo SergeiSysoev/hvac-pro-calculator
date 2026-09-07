@@ -75,14 +75,16 @@ describe('official Model 4090 special-key workflows', () => {
     expect(states[4].current?.amount).toBeCloseTo(26.565051, 6);
   });
 
-  it('rejects mixed dimensional and unitless Offset inputs', () => {
+  it('treats a bare Offset end-A value as inches', () => {
     const mixed = run([
       '1', '0', 'feet', 'run',
       '5', 'feet', 'rise',
       '7', 'conv', '4',
       'conv', 'left',
     ]);
-    expect(mixed.display).toMatchObject({ label: 'ERROR', valueText: 'DIM Error' });
+    expect(mixed.display.label).toBe('RAD');
+    expect(mixed.current?.power).toBe(1);
+    expect(mixed.current?.amount).toBeCloseTo(75, 10);
   });
 
   it('keeps exact stored Offset fields exact inside an approximate result cycle', () => {
@@ -323,7 +325,7 @@ describe('official Model 4090 special-key workflows', () => {
     expect(recalledRadius.display.unitText).toBe('FEET        INCH');
   });
 
-  it('keeps a new dimensional Circle radius dimensional after an older raw pair', () => {
+  it('keeps a new Circle radius and older bare-inch triangle independently dimensional', () => {
     const oldRawPair = run(['3', '0', 'run', '1', '0', 'rise']);
     const newDiameter = run(['1', '0', 'feet', 'circ'], oldRawPair);
     const recalledRadius = run(['conv', 'pitch'], newDiameter);
@@ -333,44 +335,45 @@ describe('official Model 4090 special-key workflows', () => {
       unitText: 'FEET        INCH',
     });
     expect(recalledRadius.current).toMatchObject({ amount: 60, power: 1 });
-    expect(newDiameter.triangle).toEqual({});
-    expect(newDiameter.triangleUnitless).toBeUndefined();
+    expect(newDiameter.triangle).toMatchObject({ x: 30, y: 10 });
+    expect(newDiameter.triangleUnitless).toBe(false);
 
-    const missingChord = run(['rise'], newDiameter);
-    expect(missingChord.display.label).toBe('ERROR');
+    const compatibleOldChord = run(['rise'], newDiameter);
+    expect(compatibleOldChord.display.label).toBe('RISE');
+    expect(compatibleOldChord.current?.amount).toBeCloseTo(segmentRise(60, 30), 10);
   });
 
-  it('keeps a raw Run/Rise Segment Radius unitless instead of inventing feet', () => {
+  it('treats bare Run/Rise Segment values as inches', () => {
     const radius = run([
       '3', '0', 'run',
       '1', '0', 'rise',
       'conv', 'pitch',
     ]);
 
-    expect(radius.display).toMatchObject({ label: 'RAD', unitText: '' });
-    expect(radius.current).toMatchObject({ amount: 16.25, power: 0 });
+    expect(radius.display).toMatchObject({ label: 'RAD', unitText: 'INCH' });
+    expect(radius.current).toMatchObject({ amount: 16.25, power: 1 });
 
     const recalled = run(['conv', 'pitch'], radius);
-    expect(recalled.display).toMatchObject({ label: 'RAD', unitText: '' });
-    expect(recalled.current).toMatchObject({ amount: 16.25, power: 0 });
+    expect(recalled.display).toMatchObject({ label: 'RAD', unitText: 'INCH' });
+    expect(recalled.current).toMatchObject({ amount: 16.25, power: 1 });
 
     const replacedByFreshPair = run([
       '4', '0', 'run',
       '1', '0', 'rise',
       'conv', 'pitch',
     ], recalled);
-    expect(replacedByFreshPair.display).toMatchObject({ label: 'RAD', unitText: '' });
-    expect(replacedByFreshPair.current).toMatchObject({ amount: 25, power: 0 });
+    expect(replacedByFreshPair.display).toMatchObject({ label: 'RAD', unitText: 'INCH' });
+    expect(replacedByFreshPair.current).toMatchObject({ amount: 25, power: 1 });
 
     const circle = cycle(run(['circ'], radius), 'circ', 3);
     expect(circle.map((state) => state.display.label)).toEqual(['DIA', 'CIRC', 'AREA']);
-    expect(circle.map((state) => state.current?.power)).toEqual([0, 0, 0]);
-    expect(circle.every((state) => state.display.unitText === '')).toBe(true);
+    expect(circle.map((state) => state.current?.power)).toEqual([1, 1, 2]);
+    expect(circle.map((state) => state.display.unitText)).toEqual(['INCH', 'INCH', 'SQ INCH']);
 
     for (const key of ['run', 'rise'] as KeyId[]) {
       const segment = run([key], radius);
-      expect(segment.current?.power).toBe(0);
-      expect(segment.display.unitText).toBe('');
+      expect(segment.current?.power).toBe(1);
+      expect(segment.display.unitText).toBe('INCH');
     }
   });
 
@@ -568,17 +571,17 @@ describe('official Model 4090 special-key workflows', () => {
     ]);
     expect(relevant.map((result) => result.value.amount)).toEqual([
       16,
+      0,
       expect.closeTo(14 * Math.sqrt(1 + (8 / 12) ** 2), 10),
       expect.closeTo(28 * Math.sqrt(1 + (8 / 12) ** 2), 10),
-      expect.closeTo(42 * Math.sqrt(1 + (8 / 12) ** 2), 10),
       14,
+      0,
       expect.closeTo(16 * Math.sqrt(1 + (7 / 12) ** 2), 10),
       expect.closeTo(32 * Math.sqrt(1 + (7 / 12) ** 2), 10),
-      expect.closeTo(48 * Math.sqrt(1 + (7 / 12) ** 2), 10),
     ]);
   });
 
-  it('generates regular ascending Jacks from the short end to the full endpoint', () => {
+  it('reverses the documented regular Jack set for ascending order', () => {
     const ascending = jackRafterResults(
       101,
       7 / 12,
@@ -586,13 +589,13 @@ describe('official Model 4090 special-key workflows', () => {
     ).filter((result) => /^JK\d+$/.test(result.label));
 
     expect(ascending.map((result) => result.value.amount)).toEqual([
-      expect.closeTo(16 * Math.sqrt(1 + (7 / 12) ** 2), 10),
-      expect.closeTo(32 * Math.sqrt(1 + (7 / 12) ** 2), 10),
-      expect.closeTo(48 * Math.sqrt(1 + (7 / 12) ** 2), 10),
-      expect.closeTo(64 * Math.sqrt(1 + (7 / 12) ** 2), 10),
-      expect.closeTo(80 * Math.sqrt(1 + (7 / 12) ** 2), 10),
-      expect.closeTo(96 * Math.sqrt(1 + (7 / 12) ** 2), 10),
-      expect.closeTo(101 * Math.sqrt(1 + (7 / 12) ** 2), 10),
+      0,
+      expect.closeTo(5 * Math.sqrt(1 + (7 / 12) ** 2), 10),
+      expect.closeTo(21 * Math.sqrt(1 + (7 / 12) ** 2), 10),
+      expect.closeTo(37 * Math.sqrt(1 + (7 / 12) ** 2), 10),
+      expect.closeTo(53 * Math.sqrt(1 + (7 / 12) ** 2), 10),
+      expect.closeTo(69 * Math.sqrt(1 + (7 / 12) ** 2), 10),
+      expect.closeTo(85 * Math.sqrt(1 + (7 / 12) ** 2), 10),
     ]);
   });
 
@@ -624,15 +627,15 @@ describe('official Model 4090 special-key workflows', () => {
     expect(afterOff.current?.amount).toBe(0);
   });
 
-  it('clears a prior unitless-triangle mode on full On/C and Off resets', () => {
-    const unitlessTriangle = run(['3', 'run', '4', 'rise']);
-    expect(unitlessTriangle.triangleUnitless).toBe(true);
+  it('clears a prior bare-inch triangle on full On/C and Off resets', () => {
+    const inchTriangle = run(['3', 'run', '4', 'rise']);
+    expect(inchTriangle.triangleUnitless).toBe(false);
 
-    const afterDoubleOn = run(['on', 'on', 'stair'], unitlessTriangle);
+    const afterDoubleOn = run(['on', 'on', 'stair'], inchTriangle);
     expect(afterDoubleOn.triangleUnitless).toBeUndefined();
     expect(afterDoubleOn.display).toMatchObject({ label: 'ERROR', valueText: 'ERROR' });
 
-    const afterOff = run(['off', 'on', 'stair'], unitlessTriangle);
+    const afterOff = run(['off', 'on', 'stair'], inchTriangle);
     expect(afterOff.triangleUnitless).toBeUndefined();
     expect(afterOff.display).toMatchObject({ label: 'ERROR', valueText: 'ERROR' });
   });
@@ -735,7 +738,7 @@ describe('official Model 4090 special-key workflows', () => {
     const circleError = run(['circ']);
     expect(circleError.display).toMatchObject({
       label: 'ERROR',
-      note: expect.stringContaining('enter a diameter'),
+      note: expect.stringContaining('enter a positive diameter'),
     });
     const stillLocked = run(['stair'], circleError);
     expect(stillLocked.display.note).toBe(circleError.display.note);
@@ -751,5 +754,75 @@ describe('official Model 4090 special-key workflows', () => {
     expect(tinySine.current?.amount).toBeCloseTo(Math.sin(1e-11 * Math.PI / 180), 25);
     expect(tinySine.current?.amount).not.toBe(0);
     expect(segmentRise(1e15, 2e7)).toBeCloseTo(0.05, 12);
+  });
+
+  it('uses segment rise to preserve a major Arc sweep when chord alone is ambiguous', () => {
+    const arc = run([
+      '1', '0', 'conv', 'pitch',
+      '1', '5', 'rise',
+      ...digits('17.320508'), 'run',
+      'conv', 'circ',
+    ]);
+    expect(arc.display.label).toBe('ARC');
+    expect(arc.current?.amount).toBeCloseTo(240, 5);
+
+    const results = cycle(arc, 'circ', 3);
+    expect(results[1].display.label).toBe('ARC');
+    expect(results[1].current?.amount).toBeCloseTo(10 * 4 * Math.PI / 3, 8);
+    expect(results[2].display.label).toBe('CORD');
+    expect(results[2].current?.amount).toBeCloseTo(10 * Math.sqrt(3), 6);
+  });
+
+  it('recomputes active Jack, Arc, and Stair cycles when relevant preferences change', () => {
+    let jack = run([
+      '8', 'feet', '5', 'inch', 'run',
+      '7', 'inch', 'pitch',
+      'jack',
+    ]);
+    jack = calculatorReducer(jack, { type: 'set-preference', key: 'onCenter', value: 24 });
+    expect(jack.display.label).toBe('JKOC STORED');
+    expect(jack.current?.amount).toBe(24);
+    const nextJack = run(['jack'], jack);
+    const expectedJack = jackRafterResults(
+      101,
+      7 / 12,
+      { ...DEFAULT_PREFERENCES, onCenter: 24 },
+      undefined,
+      false,
+      true,
+    )[1];
+    expect(nextJack.display.label).toBe(expectedJack.label);
+    expect(nextJack.current?.amount).toBeCloseTo(expectedJack.value.amount, 10);
+
+    let arc = run(['2', '0', 'conv', 'pitch', '1', '0', 'run', 'conv', 'circ']);
+    arc = calculatorReducer(arc, { type: 'set-preference', key: 'onCenter', value: 2 });
+    expect(arc.sequence?.results.find((result) => result.label === 'OC')?.value.amount).toBe(2);
+    expect(arc.sequence?.results.some((result) => result.label === 'AW1')).toBe(true);
+    expect(run(['circ'], arc).display.label).toBe('ARC');
+
+    let stair = run(['1', '1', '9', 'rise', 'stair']);
+    stair = calculatorReducer(stair, { type: 'set-preference', key: 'desiredRiser', value: 8 });
+    expect(stair.display.label).toBe('R-HT');
+    expect(stair.current?.amount).toBeCloseTo(Math.round((119 / 15) * 16) / 16, 10);
+  });
+
+  it('keeps the fixed Stair headroom preference in feet and inches after metric geometry', () => {
+    const stairs = cycle(run(['3', '0', '0', '0', 'conv', 'meter', 'rise', 'stair']), 'stair', 14);
+    expect(stairs[13].display).toMatchObject({
+      label: 'HDRM STORED',
+      valueText: '6 - 8',
+      unitText: 'FEET        INCH',
+    });
+    expect(stairs[13].current?.unit).toBe('ft-in');
+  });
+
+  it('requires a stored irregular pitch before starting Irregular Jacks', () => {
+    const missing = run([
+      '7', 'inch', 'pitch',
+      '4', 'feet', 'run',
+      'conv', 'jack',
+    ]);
+    expect(missing.display).toMatchObject({ label: 'ERROR', valueText: 'ENT Error' });
+    expect(missing.display.note).toContain('store Ir/Pitch');
   });
 });

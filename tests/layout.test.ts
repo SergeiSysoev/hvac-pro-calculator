@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import {
   calculatorKeyForKeyboardEvent,
   isCalculatorKeyboardScopeTarget,
 } from '../components/HvacCalculator';
-import { PHYSICAL_KEY_ROWS } from '../components/calculator/PhysicalCalculator';
+import PhysicalCalculator, { PHYSICAL_KEY_ROWS } from '../components/calculator/PhysicalCalculator';
 import { expressionSizeClass } from '../components/calculator/CalculatorDisplay';
-import { accessibleKeyLabel } from '../components/calculator/CalculatorKeypad';
+import CalculatorKeypad, { accessibleKeyLabel } from '../components/calculator/CalculatorKeypad';
 import { splitExpressionText } from '../components/calculator/ExpressionText';
+import { initialCalculatorState } from '../lib/calculator/engine';
 
 const keyboardTarget = (
   kind: 'background' | 'button' | 'input',
@@ -61,6 +64,54 @@ describe('physical HVAC keypad layout', () => {
     expect(expressionSizeClass('8′ 2 3/8″ + 1′')).toBe('');
     expect(expressionSizeClass('123456789012345678901234')).toBe('expression-text-medium');
     expect(expressionSizeClass('12345678901234567890123456789012345678')).toBe('expression-text-small');
+  });
+
+  it('uses the freed title space for the physical calculation display', () => {
+    const markup = renderToStaticMarkup(createElement(PhysicalCalculator, {
+      active: true,
+      state: initialCalculatorState(),
+      onPress: () => undefined,
+      onFactoryReset: () => undefined,
+    }));
+    expect(markup).toContain('calc-display-physical');
+    expect(markup).toContain('display-guidance');
+    expect(markup).not.toContain('PROFESSIONAL HVAC CALCULATOR');
+    expect(markup).not.toContain('Sheet metal · Construction math');
+  });
+
+  it('disables ordinary controls while Off and exposes the factory-reset chord', () => {
+    const offState = { ...initialCalculatorState(), powered: false };
+    const markup = renderToStaticMarkup(createElement(PhysicalCalculator, {
+      active: true,
+      state: offState,
+      onPress: () => undefined,
+      onFactoryReset: () => undefined,
+    }));
+
+    expect(markup).toContain('RESET: × + On/C · KEYBOARD: * + Esc');
+    expect(markup).toMatch(/<button(?=[^>]*disabled="")(?=[^>]*data-key="7")[^>]*>/);
+    expect(markup).toMatch(/<button(?=[^>]*data-key="multiply")(?=[^>]*tabindex="-1")[^>]*>/);
+    expect(markup).toContain('Touch reset modifier: hold Multiply, then press On/C. Keyboard reset: hold asterisk and press Escape');
+    expect(markup).toContain('Turn calculator on. For factory reset by touch, hold Multiply and press On/C. With a keyboard, hold asterisk and press Escape.');
+  });
+
+  it('disables Trade keys while Off except for On/C', () => {
+    const markup = renderToStaticMarkup(createElement(CalculatorKeypad, {
+      keys: [
+        { id: 'on', label: 'On/C', key: 'on', powerControl: true },
+        { id: 'clear', label: 'C', key: 'on' },
+        { id: 'seven', label: '7', key: '7' },
+        { id: 'preferences', label: 'Prefs', action: 'preferences' },
+      ],
+      powered: false,
+      onPress: () => undefined,
+      onAction: () => undefined,
+    }));
+
+    expect(markup).toMatch(/<button(?=[^>]*aria-label="On\/C")(?![^>]*disabled="")[^>]*>/);
+    expect(markup).toMatch(/<button(?=[^>]*aria-label="C")(?=[^>]*disabled="")[^>]*>/);
+    expect(markup).toMatch(/<button(?=[^>]*aria-label="7")(?=[^>]*disabled="")[^>]*>/);
+    expect(markup).toMatch(/<button(?=[^>]*aria-label="Prefs")(?=[^>]*disabled="")[^>]*>/);
   });
 
   it('renders written fractions as legible typographic groups', () => {

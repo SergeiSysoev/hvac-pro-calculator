@@ -213,6 +213,8 @@ export interface CalculatorState {
   circleApproximate: Partial<Record<keyof CircleValues, boolean>>;
   circleResultUnit?: LinearResultUnit;
   circleRadiusUnit?: LinearResultUnit;
+  /** Original display unit for the stored Column/Cone height mirror. */
+  circleHeightUnit?: LinearResultUnit;
   /** Current Run/Rise pair should override an older stored Segment Radius. */
   segmentPairReady?: boolean;
   /** A recently entered/calculated Radius should drive the next Segment Run/Rise solve. */
@@ -230,6 +232,74 @@ export interface CalculatorState {
   velocityCycleIndex: number;
   lastKey?: KeyId;
   history: HistoryItem[];
+}
+
+/**
+ * Preserve the meaning of unitless HVAC results when they become operands.
+ * The numeric engine intentionally stores these as scalars, so the annotation
+ * is display provenance rather than a mathematical unit conversion.
+ */
+function semanticKindForLabel(label: string): CalcValue['semanticKind'] | undefined {
+  if (label === '%GRD') return 'percent-grade';
+  if (label === 'FPM') return 'fpm';
+  if (label === 'VP') return 'velocity-pressure-imperial';
+  if (label === 'MPS') return 'mps';
+  if (label === 'KPA') return 'velocity-pressure-pa';
+  const fan = label.match(/^(CFM|CFMn|RPM|RPMn|SP|SPn|BHP|BHPn) FAN LAW [123]$/);
+  if (!fan) return undefined;
+  if (fan[1] === 'CFM' || fan[1] === 'CFMn') return 'cfm';
+  if (fan[1] === 'RPM' || fan[1] === 'RPMn') return 'rpm';
+  if (fan[1] === 'SP' || fan[1] === 'SPn') return 'static-pressure';
+  return 'bhp';
+}
+
+export function semanticValueSuffix(kind: CalcValue['semanticKind']): string | undefined {
+  const suffixes: Partial<Record<NonNullable<CalcValue['semanticKind']>, string>> = {
+    'percent-grade': '% grade',
+    fpm: 'FPM',
+    'velocity-pressure-imperial': 'in. w.g.',
+    mps: 'm/s',
+    'velocity-pressure-pa': 'Pa',
+    cfm: 'CFM',
+    rpm: 'RPM',
+    'static-pressure': 'in. w.g.',
+    bhp: 'BHP',
+  };
+  return kind ? suffixes[kind] : undefined;
+}
+
+export function displayOperandText(
+  state: Pick<CalculatorState, 'display' | 'current' | 'preferences'>,
+): string {
+  const text = state.display.plainText.replace(/\.$/, '');
+  const retainedSuffix = semanticValueSuffix(state.current?.semanticKind);
+  if (retainedSuffix) {
+    return retainedSuffix === '% grade'
+      ? `${text} [% grade]`
+      : `${text} ${retainedSuffix}`;
+  }
+  if (state.display.label === '%GRD') return `${text} [% grade]`;
+  const velocitySuffixes: Partial<Record<string, string>> = {
+    FPM: 'FPM',
+    VP: 'in. w.g.',
+    MPS: 'm/s',
+    KPA: 'Pa',
+  };
+  const velocitySuffix = velocitySuffixes[state.display.label];
+  if (velocitySuffix) return `${text} ${velocitySuffix}`;
+  const fan = state.display.label.match(/^(CFM|CFMn|RPM|RPMn|SP|SPn|BHP|BHPn) FAN LAW [123]$/);
+  if (!fan) return text;
+  const suffixes: Record<string, string> = {
+    CFM: 'CFM',
+    CFMn: 'CFM',
+    RPM: 'RPM',
+    RPMn: 'RPM',
+    SP: 'in. w.g.',
+    SPn: 'in. w.g.',
+    BHP: 'BHP',
+    BHPn: 'BHP',
+  };
+  return `${text} ${suffixes[fan[1]]}`;
 }
 
 export interface PersistedCalculatorState {
@@ -354,7 +424,7 @@ function snapshotDisplayDraft(state: CalculatorState): DisplayDraftSnapshot {
     composedInches: state.composedInches,
     imperialEntryText: state.imperialEntryText,
     current: state.current ? cloneValue(state.current) : undefined,
-    committedText: !hasRawEntry && state.current ? state.display.plainText : undefined,
+    committedText: !hasRawEntry && state.current ? displayOperandText(state) : undefined,
     inputKind: state.inputKind,
     angleDisplayMode: state.angleDisplayMode,
     exponentBase: state.exponentBase ? cloneValue(state.exponentBase) : undefined,
@@ -626,6 +696,20 @@ function sanitizeStoredValue(value: unknown): CalcValue | undefined {
   };
   if (typeof value.angle === 'boolean') sanitized.angle = value.angle;
   if (value.approximate === true) sanitized.approximate = true;
+  const semanticKinds: NonNullable<CalcValue['semanticKind']>[] = [
+    'percent-grade',
+    'fpm',
+    'velocity-pressure-imperial',
+    'mps',
+    'velocity-pressure-pa',
+    'cfm',
+    'rpm',
+    'static-pressure',
+    'bhp',
+  ];
+  if (isOption(value.semanticKind, semanticKinds)) {
+    sanitized.semanticKind = value.semanticKind;
+  }
   if (
     value.power === 1 && value.system === 'imperial' &&
     typeof value.fractionDenominator === 'number' &&
@@ -1281,7 +1365,9 @@ function showValue(
   note?: string,
   provenance: DisplayValueProvenance = 'computed',
 ): CalculatorState {
-  const display = displayFor(value, state.preferences, label, note);
+  const shownValue = cloneValue(value);
+  shownValue.semanticKind = semanticKindForLabel(label) ?? shownValue.semanticKind;
+  const display = displayFor(shownValue, state.preferences, label, note);
   return pushHistory({
     ...state,
     entry: '',
@@ -1290,16 +1376,17 @@ function showValue(
     imperialEntryText: undefined,
     imperialEntryComponents: undefined,
     exponentBase: undefined,
-    current: cloneValue(value),
+    current: cloneValue(shownValue),
     displayExpression: withoutDisplayedCurrentOperand(state),
     completedExpression: [],
     transformationSource: undefined,
     transformationResultMetadata: undefined,
     unitEntryUndo: undefined,
-    currentDisplayMetadata: displayMetadata(value, display, provenance, state.angleDisplayMode),
+    currentDisplayMetadata: displayMetadata(shownValue, display, provenance, state.angleDisplayMode),
     currentSourceExpression: undefined,
     display,
     inputActive: false,
+    inputKind: undefined,
   }, display);
 }
 
@@ -1323,6 +1410,7 @@ function showEnteredArcAngle(state: CalculatorState, value: CalcValue): Calculat
     currentSourceExpression: undefined,
     display,
     inputActive: false,
+    inputKind: undefined,
   }, display);
 }
 
@@ -1479,6 +1567,28 @@ function linearResultUnit(value: CalcValue): CalculatorState['resultUnit'] {
   if (value.unit === 'm' || value.unit === 'sq-m' || value.unit === 'cu-m') return 'm';
   if (value.unit === 'mm' || value.unit === 'sq-mm' || value.unit === 'cu-mm') return 'mm';
   return undefined;
+}
+
+/**
+ * Model 4090 dimensional keys treat a bare numeric entry as inches. Keep that
+ * default local to workflows that explicitly expect a length so scalar math,
+ * angles, percentages, Fan Laws, and VP/FPM remain dimensionless.
+ */
+function linearInputWithDefaultInches(
+  value: CalcValue,
+  inputKind?: CalculatorState['inputKind'],
+): CalcValue {
+  if (value.angle || inputKind === 'percent' || value.semanticKind) {
+    throw new CalcError('TYP Error');
+  }
+  if (value.power === 1) return value;
+  if (value.power !== 0) throw new CalcError('DIM Error');
+  const inches = measurement(value.amount, 'in', 1, value.fractionDenominator);
+  inches.approximate = value.approximate || undefined;
+  if (inches.source && value.source?.entryText) {
+    inches.source.entryText = value.source.entryText;
+  }
+  return inches;
 }
 
 function combinedLinearResultUnit(units: Array<LinearResultUnit | undefined>): LinearResultUnit | undefined {
@@ -2104,6 +2214,12 @@ function synchronizedSolvedTriangle(
 
   const circle = { ...state.circle };
   const circleApproximate = { ...state.circleApproximate };
+  const circleHeightUnit = state.triangleUnitless
+    ? undefined
+    : state.triangleUnits.y
+      ?? state.resultUnit
+      ?? combinedLinearResultUnit(Object.values(state.triangleUnits))
+      ?? state.circleResultUnit;
 
   for (const field of ['chord', 'rise', 'height'] as const) {
     delete circle[field];
@@ -2143,6 +2259,7 @@ function synchronizedSolvedTriangle(
     triangleApproximate,
     circle,
     circleApproximate,
+    circleHeightUnit,
     segmentPairReady: segmentPairIsCurrent,
     segmentRadiusReady: segmentPairIsCurrent ? false : state.segmentRadiusReady,
     segmentInputs: segmentPairIsCurrent ? ['x', 'y'] : state.segmentInputs,
@@ -2156,9 +2273,7 @@ function enterTriangle(state: CalculatorState, key: 'x' | 'y' | 'r'): Calculator
   ) return advanceSequence(state);
   if (hasPendingInput(state)) {
     const input = requireInput(state);
-    const value = input.value;
-    if (value.angle) throw new CalcError('TYP Error');
-    if (value.power !== 0 && value.power !== 1) throw new CalcError('DIM Error');
+    const value = linearInputWithDefaultInches(input.value, input.state.inputKind);
     const unitless = value.power === 0;
     const hasStoredSide = state.triangleInputs.some((entry) => entry === 'x' || entry === 'y' || entry === 'r');
     const switchesDimensionMode = (
@@ -2177,6 +2292,7 @@ function enterTriangle(state: CalculatorState, key: 'x' | 'y' | 'r'): Calculator
           circleApproximate: {},
           circleResultUnit: undefined,
           circleRadiusUnit: undefined,
+          circleHeightUnit: undefined,
           segmentPairReady: false,
           segmentRadiusReady: false,
           segmentInputs: [],
@@ -2219,6 +2335,7 @@ function enterTriangle(state: CalculatorState, key: 'x' | 'y' | 'r'): Calculator
         circle,
         circleApproximate,
         circleResultUnit,
+        circleHeightUnit: key === 'y' ? enteredUnit : geometryState.circleHeightUnit,
         segmentPairReady: freshSegmentPair,
         segmentRadiusReady: (key === 'x' || key === 'y')
           && Boolean(geometryState.segmentRadiusReady)
@@ -2264,6 +2381,7 @@ function enterTriangle(state: CalculatorState, key: 'x' | 'y' | 'r'): Calculator
         ? {}
         : { x: pairUnit, y: pairUnit, r: pairUnit },
       circle: { ...synchronized.circle, chord, rise, height: rise },
+      circleHeightUnit: state.circleHeightUnit ?? state.triangleUnits.y ?? pairUnit,
       circleApproximate: {
         ...synchronized.circleApproximate,
         chord: approximate,
@@ -2300,6 +2418,7 @@ function enterTriangle(state: CalculatorState, key: 'x' | 'y' | 'r'): Calculator
         ? {}
         : { x: pairUnit, y: pairUnit, r: pairUnit },
       circle: { ...synchronized.circle, chord, rise, height: rise },
+      circleHeightUnit: pairUnit,
       circleApproximate: {
         ...synchronized.circleApproximate,
         chord: chordApproximate,
@@ -2341,14 +2460,20 @@ function enterPitch(state: CalculatorState): CalculatorState {
     const input = requireInput(state);
     let slope: number;
     let startIndex: number;
+    const usesPercentGrade = state.inputKind === 'percent'
+      || input.value.semanticKind === 'percent-grade';
     if (input.value.power === 1) {
       if (!Number.isFinite(input.value.amount) || input.value.amount <= 0) throw new CalcError('ENT Error');
       slope = input.value.amount / 12;
       startIndex = 0;
     } else if (input.value.power === 0) {
-      if (state.inputKind === 'percent') {
+      if (usesPercentGrade) {
         if (!Number.isFinite(input.value.amount) || input.value.amount <= 0) throw new CalcError('ENT Error');
-        slope = input.value.amount;
+        // A live % entry is already stored as a ratio; a recalled/cycled
+        // percent-grade result is stored as the displayed percentage.
+        slope = input.value.semanticKind === 'percent-grade'
+          ? input.value.amount / 100
+          : input.value.amount;
         startIndex = 2;
       } else {
         if (!Number.isFinite(input.value.amount) || input.value.amount <= 0 || input.value.amount >= 90) {
@@ -2365,7 +2490,7 @@ function enterPitch(state: CalculatorState): CalculatorState {
       : Math.atan(slope) * 180 / Math.PI;
     const slopeApproximate = Boolean(
       input.value.approximate
-      || (input.value.power === 0 && state.inputKind !== 'percent'),
+      || (input.value.power === 0 && !usesPercentGrade),
     );
     const thetaApproximate = startIndex === 1
       ? Boolean(input.value.approximate)
@@ -2378,7 +2503,7 @@ function enterPitch(state: CalculatorState): CalculatorState {
         ? { ...cloneValue(input.value), unit: 'in', system: 'imperial' }
         : startIndex === 1
           ? degrees(input.value.amount)
-          : scalar(input.value.amount * 100),
+          : scalar(slope * 100),
     };
     const resultApproximation = results.map((_, index) => Boolean(
       input.value.approximate
@@ -2458,8 +2583,10 @@ function fanLaw(state: CalculatorState, law: 1 | 2 | 3): CalculatorState {
     const value = state.registers[key];
     return value !== undefined && value.amount !== 0 && Boolean(value.approximate);
   });
+  const solvedValue = markValueApproximate(solved.result.value, approximate);
+  solvedValue.semanticKind = semanticKindForLabel(solved.result.label);
   const registerValue = (key: typeof fanKeys[number]): CalcValue => key === missingKey
-    ? markValueApproximate(scalar(solved.registers[key]), approximate)
+    ? { ...cloneValue(solvedValue), amount: solved.registers[key] }
     : cloneValue(state.registers[key]!);
   const registers = {
     ...state.registers,
@@ -2470,7 +2597,7 @@ function fanLaw(state: CalculatorState, law: 1 | 2 | 3): CalculatorState {
   };
   return showValue(
     { ...state, registers },
-    markValueApproximate(solved.result.value, approximate),
+    solvedValue,
     solved.result.label,
   );
 }
@@ -2483,19 +2610,25 @@ function offset(state: CalculatorState): CalculatorState {
   if (x === undefined || y === undefined || !a) throw new CalcError('ENT Error');
   if (a.angle) throw new CalcError('TYP Error');
   if (state.triangleUnitless === true && a.power !== 0) throw new CalcError('DIM Error');
-  if (state.triangleUnitless !== true && a.power !== 1) throw new CalcError('DIM Error');
-  let fittingHeight: number;
-  if (a.power === 1) fittingHeight = a.amount;
-  else if (a.power === 0 && state.triangleUnitless === true) fittingHeight = a.amount;
-  else throw new CalcError('ENT Error');
+  if (state.triangleUnitless !== true && a.power !== 0 && a.power !== 1) {
+    throw new CalcError('DIM Error');
+  }
+  const fittingHeightValue = state.triangleUnitless === true
+    ? a
+    : linearInputWithDefaultInches(a);
+  const fittingHeight = fittingHeightValue.amount;
+  const resultUnit = state.triangleUnitless === true
+    ? undefined
+    : linearResultUnit(fittingHeightValue) ?? state.resultUnit;
+  const resultState = { ...state, resultUnit };
   const xApproximate = Boolean(state.triangleApproximate.x);
   const yApproximate = Boolean(state.triangleApproximate.y);
   const aApproximate = Boolean(a.approximate);
   const approximate = xApproximate || yApproximate || aApproximate;
   return setSequence(
-    state,
+    resultState,
     'offset',
-    contextualOrUnitlessResults(state, offsetResults(x, y, fittingHeight)),
+    contextualOrUnitlessResults(resultState, offsetResults(x, y, fittingHeight)),
     'left',
     0,
     [
@@ -2513,20 +2646,16 @@ function offset(state: CalculatorState): CalculatorState {
 
 function lawCos(state: CalculatorState): CalculatorState {
   rejectUnusedInput(state);
-  const { a, b, c } = state.registers;
-  if (!a || !b || !c) throw new CalcError('ENT Error');
-  if (a.angle || b.angle || c.angle) throw new CalcError('TYP Error');
-  const powers = new Set([a.power, b.power, c.power]);
-  if (powers.size !== 1 || (a.power !== 0 && a.power !== 1)) throw new CalcError('DIM Error');
+  const stored = state.registers;
+  if (!stored.a || !stored.b || !stored.c) throw new CalcError('ENT Error');
+  const a = linearInputWithDefaultInches(stored.a);
+  const b = linearInputWithDefaultInches(stored.b);
+  const c = linearInputWithDefaultInches(stored.c);
   const results = lawOfCosines(a.amount, b.amount, c.amount);
-  const resultUnit = a.power === 1 ? resultUnitForValues([a, b, c]) : undefined;
-  const displayResults = a.power === 0
-    ? results.map((result) => ({
-        ...result,
-        value: result.value.angle ? result.value : scalar(result.value.amount),
-      }))
-    : resultsInUnit(results, resultUnit);
-  const approximate = [a, b, c].some((value) => Boolean(value.approximate));
+  const resultUnit = resultUnitForValues([a, b, c]) ?? 'in';
+  const displayResults = resultsInUnit(results, resultUnit);
+  const approximate = [stored.a, stored.b, stored.c]
+    .some((value) => Boolean(value.approximate));
   return setSequence(
     { ...state, resultUnit },
     'lawcos',
@@ -2538,9 +2667,9 @@ function lawCos(state: CalculatorState): CalculatorState {
       approximate,
       approximate,
       approximate,
-      Boolean(a.approximate),
-      Boolean(b.approximate),
-      Boolean(c.approximate),
+      Boolean(stored.a.approximate),
+      Boolean(stored.b.approximate),
+      Boolean(stored.c.approximate),
     ],
   );
 }
@@ -2552,21 +2681,31 @@ function circle(state: CalculatorState): CalculatorState {
   ) return advanceSequence(state);
   if (hasPendingInput(state)) {
     const input = requireInput(state);
-    if (input.value.power !== 1) throw new CalcError('DIM Error');
-    const enteredUnit = linearResultUnit(input.value);
+    const value = linearInputWithDefaultInches(input.value, input.state.inputKind);
+    const enteredUnit = linearResultUnit(value);
     const switchesDimensionMode = state.triangleUnitless === true;
     const retainedHeight = switchesDimensionMode ? undefined : state.circle.height;
+    const retainedArcDegrees = switchesDimensionMode ? undefined : state.circle.arcDegrees;
+    const retainedArcLength = switchesDimensionMode ? undefined : state.circle.arcLength;
     const values = {
-      diameter: input.value.amount,
-      radius: input.value.amount / 2,
+      diameter: value.amount,
+      radius: value.amount / 2,
       height: retainedHeight,
+      arcDegrees: retainedArcDegrees,
+      arcLength: retainedArcLength,
     };
     const circleApproximate: CalculatorState['circleApproximate'] = {
-      diameter: Boolean(input.value.approximate),
-      radius: Boolean(input.value.approximate),
+      diameter: Boolean(value.approximate),
+      radius: Boolean(value.approximate),
     };
     if (retainedHeight !== undefined && state.circleApproximate.height) {
       circleApproximate.height = true;
+    }
+    if (retainedArcDegrees !== undefined && state.circleApproximate.arcDegrees) {
+      circleApproximate.arcDegrees = true;
+    }
+    if (retainedArcLength !== undefined && state.circleApproximate.arcLength) {
+      circleApproximate.arcLength = true;
     }
     const circleResultUnit = enteredUnit;
     const next = {
@@ -2575,6 +2714,7 @@ function circle(state: CalculatorState): CalculatorState {
       circleApproximate,
       circleResultUnit,
       circleRadiusUnit: enteredUnit,
+      circleHeightUnit: switchesDimensionMode ? undefined : state.circleHeightUnit,
       // A newly entered Diameter starts a new segment-input generation.
       // Compatible dimensional triangle registers stay available to their own
       // functions; incompatible unitless registers are dropped.
@@ -2598,7 +2738,10 @@ function circle(state: CalculatorState): CalculatorState {
       Boolean(circleApproximate.radius),
     );
   }
-  const next = { ...state, resultUnit: state.circleResultUnit ?? state.resultUnit };
+  const next = {
+    ...state,
+    resultUnit: state.circleRadiusUnit ?? state.circleResultUnit ?? state.resultUnit,
+  };
   return setSequence(
     next,
     'circle',
@@ -2614,17 +2757,81 @@ function enterArc(state: CalculatorState): CalculatorState {
   if (!hasPendingInput(state)) {
     const circleValues = { ...state.circle };
     const radius = circleValues.radius ?? (circleValues.diameter === undefined ? undefined : circleValues.diameter / 2);
+    if (!radius || radius <= 0) throw new CalcError('ENT Error');
+    const retainedArcDegrees = circleValues.arcDegrees;
+    const retainedArcLength = circleValues.arcLength;
+    const hasFreshSegmentInput = Boolean(
+      state.segmentPairReady
+      || state.segmentInputs.includes('x')
+      || state.segmentInputs.includes('y')
+    );
+    if (!hasFreshSegmentInput && (retainedArcDegrees !== undefined || retainedArcLength !== undefined)) {
+      const retainedInputApproximate = Boolean(
+        retainedArcDegrees !== undefined
+          ? state.circleApproximate.arcDegrees
+          : state.circleApproximate.arcLength
+      );
+      const geometryApproximate = Boolean(
+        state.circleApproximate.radius
+        || state.circleApproximate.diameter
+        || retainedInputApproximate
+      );
+      const next = {
+        ...state,
+        circle: { ...circleValues, radius, diameter: radius * 2 },
+        resultUnit: state.circleResultUnit ?? state.resultUnit,
+      };
+      const results = markArcResultsApproximate(
+        contextualOrUnitlessResults(next, arcResults(next.circle, state.preferences.onCenter)),
+        geometryApproximate,
+        Boolean(state.onCenterApproximate),
+      );
+      const sequence = { id: 'arc', results, index: -1, trigger: 'circ' as KeyId };
+      const sequenceState = { ...next, sequence };
+      const shown = retainedArcDegrees !== undefined
+        ? showEnteredArcAngle(
+            sequenceState,
+            markValueApproximate(degrees(retainedArcDegrees), retainedInputApproximate),
+          )
+        : showValue(
+            sequenceState,
+            markValueApproximate(
+              contextualValue(next, {
+                amount: retainedArcLength!,
+                power: 1,
+                unit: 'ft-in',
+                system: 'imperial',
+              }),
+              retainedInputApproximate,
+            ),
+            'ARC',
+          );
+      return { ...shown, sequence };
+    }
+
     const chord = circleValues.chord ?? state.triangle.x;
     const rise = circleValues.rise ?? state.triangle.y;
-    if (!radius || radius <= 0) throw new CalcError('ENT Error');
     let theta: number | undefined;
     let segmentInputApproximate = false;
     const latestSegmentInput = state.segmentInputs.at(-1);
-    const sourceOrder: Array<'chord' | 'rise'> = latestSegmentInput === 'x'
-      ? ['chord']
-      : latestSegmentInput === 'y'
-        ? ['rise']
-        : ['rise', 'chord'];
+    const hasFreshSegmentPair = Boolean(
+      state.segmentPairReady
+      && state.segmentInputs.includes('x')
+      && state.segmentInputs.includes('y')
+      && chord !== undefined
+      && rise !== undefined
+    );
+    // A chord alone describes only the minor sweep. When a fresh chord/rise
+    // pair is present, Rise disambiguates minor versus major segments. Run and
+    // Rise are shared registers, so the chord mirror is not required to match
+    // the stored circle when Rise was calculated by a triangle workflow.
+    const sourceOrder: Array<'chord' | 'rise'> = hasFreshSegmentPair
+      ? ['rise']
+      : latestSegmentInput === 'x'
+        ? ['chord']
+        : latestSegmentInput === 'y'
+          ? ['rise']
+          : ['rise', 'chord'];
     for (const source of sourceOrder) {
       if (source === 'rise' && rise !== undefined) {
         const cosine = (radius - rise) / radius;
@@ -2633,6 +2840,14 @@ function enterArc(state: CalculatorState): CalculatorState {
           segmentInputApproximate = state.circle.rise !== undefined
             ? Boolean(state.circleApproximate.rise)
             : Boolean(state.triangleApproximate.y);
+          if (hasFreshSegmentPair) {
+            segmentInputApproximate = Boolean(
+              segmentInputApproximate
+              || (state.circle.chord !== undefined
+                ? state.circleApproximate.chord
+                : state.triangleApproximate.x),
+            );
+          }
         }
       }
       if (source === 'chord' && chord !== undefined) {
@@ -2700,6 +2915,12 @@ function enterArc(state: CalculatorState): CalculatorState {
     ...input.state,
     circle: circleValues,
     circleApproximate,
+    // The explicitly entered Arc operand is newer than any prior segment
+    // chord/rise. Keep those independent values, but retire their freshness
+    // markers so a later Arc recall uses the explicit degree/length.
+    segmentPairReady: false,
+    segmentInputs: [],
+    segmentTriangleDirty: false,
     circleResultUnit: input.value.power === 1
       ? linearResultUnit(input.value) ?? state.circleResultUnit
       : state.circleResultUnit,
@@ -2731,19 +2952,22 @@ function enterArc(state: CalculatorState): CalculatorState {
 function segRadius(state: CalculatorState): CalculatorState {
   if (hasPendingInput(state)) {
     const input = requireInput(state);
-    if (input.value.power !== 1) throw new CalcError('DIM Error');
+    const value = linearInputWithDefaultInches(input.value, input.state.inputKind);
+    if (!Number.isFinite(value.amount) || value.amount <= 0) {
+      throw new CalcError('ENT Error');
+    }
     const switchesDimensionMode = state.triangleUnitless === true;
     const circleValues = {
       ...(switchesDimensionMode ? {} : state.circle),
-      radius: input.value.amount,
-      diameter: input.value.amount * 2,
+      radius: value.amount,
+      diameter: value.amount * 2,
     };
     const circleApproximate = {
       ...(switchesDimensionMode ? {} : state.circleApproximate),
-      radius: Boolean(input.value.approximate),
-      diameter: Boolean(input.value.approximate),
+      radius: Boolean(value.approximate),
+      diameter: Boolean(value.approximate),
     };
-    const circleResultUnit = linearResultUnit(input.value);
+    const circleResultUnit = linearResultUnit(value);
     return showValue(
       {
         ...input.state,
@@ -2751,6 +2975,7 @@ function segRadius(state: CalculatorState): CalculatorState {
         circleApproximate,
         circleResultUnit,
         circleRadiusUnit: circleResultUnit,
+        circleHeightUnit: switchesDimensionMode ? undefined : state.circleHeightUnit,
         segmentPairReady: false,
         segmentRadiusReady: true,
         segmentInputs: [],
@@ -2764,7 +2989,7 @@ function segRadius(state: CalculatorState): CalculatorState {
         triangleApproximate: switchesDimensionMode ? {} : state.triangleApproximate,
         triangleUnitless: switchesDimensionMode ? undefined : state.triangleUnitless,
       },
-      input.value,
+      value,
       'RAD',
     );
   }
@@ -2793,9 +3018,12 @@ function segRadius(state: CalculatorState): CalculatorState {
     diameter: approximate,
   };
   const latestTriangleInput = state.triangleInputs.at(-1);
-  const circleResultUnit = latestTriangleInput === undefined
-    ? state.circleResultUnit ?? state.resultUnit
-    : state.triangleUnits[latestTriangleInput] ?? state.circleResultUnit ?? state.resultUnit;
+  const circleResultUnit = derivedRadius && latestTriangleInput !== undefined
+    ? state.triangleUnits[latestTriangleInput]
+      ?? state.circleRadiusUnit
+      ?? state.circleResultUnit
+      ?? state.resultUnit
+    : state.circleRadiusUnit ?? state.circleResultUnit ?? state.resultUnit;
   const next = {
     ...state,
     circle: circleValues,
@@ -2843,12 +3071,16 @@ function hip(state: CalculatorState): CalculatorState {
 function irregularPitch(state: CalculatorState): CalculatorState {
   const input = requireInput(state);
   let slope: number;
+  const usesPercentGrade = state.inputKind === 'percent'
+    || input.value.semanticKind === 'percent-grade';
   if (input.value.power === 1) {
     if (!Number.isFinite(input.value.amount) || input.value.amount <= 0) throw new CalcError('ENT Error');
     slope = input.value.amount / 12;
-  } else if (input.value.power === 0 && state.inputKind === 'percent') {
+  } else if (input.value.power === 0 && usesPercentGrade) {
     if (!Number.isFinite(input.value.amount) || input.value.amount <= 0) throw new CalcError('ENT Error');
-    slope = input.value.amount;
+    slope = input.value.semanticKind === 'percent-grade'
+      ? input.value.amount / 100
+      : input.value.amount;
   } else if (input.value.power === 0) {
     if (!Number.isFinite(input.value.amount) || input.value.amount <= 0 || input.value.amount >= 90) {
       throw new CalcError('ENT Error');
@@ -2858,7 +3090,7 @@ function irregularPitch(state: CalculatorState): CalculatorState {
   else throw new CalcError('DIM Error');
   const approximate = Boolean(
     input.value.approximate
-    || (input.value.power === 0 && state.inputKind !== 'percent'),
+    || (input.value.power === 0 && !usesPercentGrade),
   );
   return showValue(
     {
@@ -2878,16 +3110,21 @@ function irregularPitch(state: CalculatorState): CalculatorState {
 function jacks(state: CalculatorState, irregularFirst: boolean): CalculatorState {
   const id = irregularFirst ? 'ir-jacks' : 'jacks';
   if (state.sequence?.id === id && !hasPendingInput(state)) return advanceSequence(state);
+  if (irregularFirst) {
+    rejectUnusedInput(state);
+    if (state.irregularPitchSlope === undefined) throw new CalcError('ENT Error');
+  }
   if (!irregularFirst && hasPendingInput(state)) {
     const input = requireInput(state);
-    if (input.value.power !== 1 || input.value.amount <= 0) throw new CalcError('DIM Error');
-    const preferences = { ...state.preferences, onCenter: input.value.amount };
+    const value = linearInputWithDefaultInches(input.value, input.state.inputKind);
+    if (value.amount <= 0) throw new CalcError('DIM Error');
+    const preferences = { ...state.preferences, onCenter: value.amount };
     return showValue({
       ...input.state,
       preferences,
       onCenterStored: true,
-      onCenterApproximate: Boolean(input.value.approximate) || undefined,
-    }, input.value, 'JKOC STORED');
+      onCenterApproximate: Boolean(value.approximate) || undefined,
+    }, value, 'JKOC STORED');
   }
   rejectUnusedInput(state);
   if (state.triangleUnitless) throw new CalcError('DIM Error');
@@ -2921,18 +3158,31 @@ function jacks(state: CalculatorState, irregularFirst: boolean): CalculatorState
   return setSequence(solvedState, id, results, 'jack', 0, resultApproximation);
 }
 
+function contextualStairResults(
+  state: CalculatorState,
+  preferences: Preferences,
+): NamedResult[] {
+  const riseStored = state.triangleInputs.includes('y');
+  const runStored = state.triangleInputs.includes('x');
+  const rawResults = stairResults(
+    state.triangle.y,
+    state.triangle.x,
+    preferences,
+    { rise: riseStored, run: runStored },
+  );
+  const contextual = contextualResults({ ...state, preferences }, rawResults);
+  return contextual.map((result, index) => (
+    result.label === 'HDRM STORED' ? rawResults[index] : result
+  ));
+}
+
 function stairs(state: CalculatorState): CalculatorState {
   if (state.sequence?.id === 'stairs' && !hasPendingInput(state)) return advanceSequence(state);
   rejectUnusedInput(state);
   if (state.triangleUnitless) throw new CalcError('DIM Error');
   const riseStored = state.triangleInputs.includes('y');
   const runStored = state.triangleInputs.includes('x');
-  const results = contextualResults(state, stairResults(
-    state.triangle.y,
-    state.triangle.x,
-    state.preferences,
-    { rise: riseStored, run: runStored },
-  ));
+  const results = contextualStairResults(state, state.preferences);
   const derivedApproximate = triangleSolveIsApproximate(state)
     || Boolean(state.desiredRiserApproximate);
   return setSequence(
@@ -2955,13 +3205,14 @@ function stairs(state: CalculatorState): CalculatorState {
 
 function storeRiser(state: CalculatorState): CalculatorState {
   const input = requireInput(state);
-  if (input.value.power !== 1 || input.value.amount <= 0) throw new CalcError('DIM Error');
-  const preferences = { ...state.preferences, desiredRiser: input.value.amount };
+  const value = linearInputWithDefaultInches(input.value, input.state.inputKind);
+  if (value.amount <= 0) throw new CalcError('DIM Error');
+  const preferences = { ...state.preferences, desiredRiser: value.amount };
   return showValue({
     ...input.state,
     preferences,
-    desiredRiserApproximate: Boolean(input.value.approximate) || undefined,
-  }, input.value, 'R-HT STORED');
+    desiredRiserApproximate: Boolean(value.approximate) || undefined,
+  }, value, 'R-HT STORED');
 }
 
 function columnCone(state: CalculatorState): CalculatorState {
@@ -2973,7 +3224,7 @@ function columnCone(state: CalculatorState): CalculatorState {
   if (!radius || !height) throw new CalcError('ENT Error');
   const resultUnit = combinedLinearResultUnit([
     state.circleRadiusUnit ?? state.circleResultUnit,
-    state.triangleUnits.y,
+    state.circle.height !== undefined ? state.circleHeightUnit : state.triangleUnits.y,
   ]) ?? state.resultUnit;
   const approximate = Boolean(
     state.circleApproximate.radius
@@ -3068,6 +3319,12 @@ function memoryPlus(state: CalculatorState, subtract = false): CalculatorState {
   const value = current
     ? operate(current, subtract ? '-' : '+', input.value)
     : subtract ? negateValue(input.value) : cloneValue(input.value);
+  if (current) {
+    value.semanticKind = current.semanticKind !== undefined
+      && current.semanticKind === input.value.semanticKind
+      ? current.semanticKind
+      : undefined;
+  }
   return showValue(
     { ...input.state, memory: { ...state.memory, cumulative: value } },
     input.value,
@@ -3490,12 +3747,12 @@ function recallSharedRegister(state: CalculatorState, key: keyof SharedRegisters
 
 function handleRecall(state: CalculatorState, key: KeyId): CalculatorState {
   if (key === 'recall') {
+    const empty = state.memory.cumulative === undefined;
     const value = state.memory.cumulative ?? scalar(0);
     return showRecalledValue(
-      { ...state, memory: { ...state.memory, cumulative: undefined } },
+      { ...clearSequence(state), memory: { ...state.memory, cumulative: undefined } },
       value,
-      'M+',
-      false,
+      empty ? 'M+ EMPTY' : 'M+',
     );
   }
   if (key === 'mplus') return memoryRecall({ ...state, modifier: undefined }, 'cumulative');
@@ -3603,7 +3860,14 @@ function handleSecondary(state: CalculatorState, key: KeyId): CalculatorState {
     case 'recall': {
       const input = requireInput(next);
       const old = state.memory.cumulative;
-      return showValue({ ...input.state, memory: { ...state.memory, cumulative: cloneValue(input.value) } }, old ?? scalar(0), 'SWAP M+');
+      return showRecalledValue(
+        {
+          ...clearSequence(input.state),
+          memory: { ...state.memory, cumulative: cloneValue(input.value) },
+        },
+        old ?? scalar(0),
+        old === undefined ? 'SWAP M+ EMPTY' : 'SWAP M+',
+      );
     }
     case '4': return sharedRegister(next, 'a', 'A');
     case '5': return sharedRegister(next, 'b', 'B');
@@ -3887,6 +4151,7 @@ function primaryPress(state: CalculatorState, key: KeyId): CalculatorState {
         parenthesisDepth: state.parenthesisDepth + 1,
         current: undefined,
         inputActive: false,
+        sequence: undefined,
         display: { label: `(${state.parenthesisDepth + 1}`, valueText: '0.', unitText: '', plainText: '(' },
       };
     }
@@ -4017,6 +4282,7 @@ function clearRuntime(state: CalculatorState, fullTemporary = false): Calculator
     circleApproximate: fullTemporary ? {} : state.circleApproximate,
     circleResultUnit: fullTemporary ? undefined : state.circleResultUnit,
     circleRadiusUnit: fullTemporary ? undefined : state.circleRadiusUnit,
+    circleHeightUnit: fullTemporary ? undefined : state.circleHeightUnit,
     segmentPairReady: fullTemporary ? false : state.segmentPairReady,
     segmentRadiusReady: fullTemporary ? false : state.segmentRadiusReady,
     segmentInputs: fullTemporary ? [] : state.segmentInputs,
@@ -4079,37 +4345,168 @@ function press(state: CalculatorState, key: KeyId): CalculatorState {
       ? handleRecall({ ...state, sequence: undefined }, key)
       : primaryPress(state, key);
   if (next === state) return state;
-  return { ...next, lastKey: key };
+  const unitRepresentationOverlay = Boolean(
+    (key === 'feet' || key === 'inch' || key === 'meter')
+    && state.current
+    && next.current
+    && state.current.amount === next.current.amount
+    && state.current.power === next.current.power
+    && Boolean(state.current.angle) === Boolean(next.current.angle),
+  );
+  const isDisplayOnlySequenceOverlay = unitRepresentationOverlay
+    || key === 'mplus'
+    || (state.modifier === 'convert' && /^[1-8]$/.test(key));
+  const keepsOldSequence = Boolean(
+    state.sequence
+    && next.sequence === state.sequence
+    && isDisplayOnlySequenceOverlay,
+  );
+  return {
+    ...next,
+    sequence: next.sequence === state.sequence && !keepsOldSequence
+      ? undefined
+      : next.sequence,
+    // A conversion/storage overlay may show a different representation, but
+    // it is not a new operand for the active multi-result workflow. Keeping it
+    // non-input lets the original trigger advance instead of consuming the
+    // displayed conversion as fresh geometry.
+    inputActive: keepsOldSequence ? false : next.inputActive,
+    inputKind: keepsOldSequence ? undefined : next.inputKind,
+    lastKey: key,
+  };
+}
+
+function refreshPreferenceSensitiveSequence(
+  state: CalculatorState,
+  preferences: Preferences,
+): CalculatorState {
+  const sequence = state.sequence;
+  const next = { ...state, preferences };
+  if (!sequence) return next;
+
+  let results: NamedResult[] | undefined;
+  if (sequence.id === 'arc') {
+    const geometryApproximate = Boolean(
+      state.circleApproximate.radius
+      || state.circleApproximate.diameter
+      || state.circleApproximate.arcDegrees
+      || state.circleApproximate.arcLength
+    );
+    results = markArcResultsApproximate(
+      contextualOrUnitlessResults(next, arcResults(state.circle, preferences.onCenter)),
+      geometryApproximate,
+      Boolean(state.onCenterApproximate),
+    );
+  } else if (sequence.id === 'jacks' || sequence.id === 'ir-jacks') {
+    const irregularFirst = sequence.id === 'ir-jacks';
+    if (irregularFirst && state.irregularPitchSlope === undefined) return next;
+    const solved = solveRightTriangle(triangleForSolve(next));
+    const run = solved.x;
+    const slope = solved.y / solved.x;
+    const geometryApproximate = triangleSolveIsApproximate(next)
+      || Boolean(next.irregularPitchSlope !== undefined && next.irregularPitchApproximate);
+    const onCenterApproximate = Boolean(next.onCenterApproximate);
+    const rebuilt = contextualResults(next, jackRafterResults(
+      run,
+      slope,
+      preferences,
+      next.irregularPitchSlope,
+      irregularFirst,
+      Boolean(next.onCenterStored),
+    ));
+    results = markResultsApproximate(rebuilt, rebuilt.map((result) => {
+      if (/^(JK|IJ)OC/.test(result.label)) {
+        const calculatedMateOnCenter = next.irregularPitchSlope !== undefined
+          && preferences.irregularJackMode === 'mate'
+          && !result.label.endsWith('STORED');
+        return onCenterApproximate || (calculatedMateOnCenter && geometryApproximate);
+      }
+      if (/^(JK|IJ)\d+$/.test(result.label)) {
+        return geometryApproximate || onCenterApproximate;
+      }
+      return geometryApproximate;
+    }));
+  } else if (sequence.id === 'stairs') {
+    const riseStored = next.triangleInputs.includes('y');
+    const runStored = next.triangleInputs.includes('x');
+    const derivedApproximate = triangleSolveIsApproximate(next)
+      || Boolean(next.desiredRiserApproximate);
+    results = markResultsApproximate(
+      contextualStairResults(next, preferences),
+      [
+        ...Array.from({ length: 9 }, () => derivedApproximate),
+        runStored ? Boolean(next.triangleApproximate.x) : derivedApproximate,
+        riseStored ? Boolean(next.triangleApproximate.y) : derivedApproximate,
+        Boolean(next.desiredRiserApproximate),
+        false,
+        false,
+        false,
+      ],
+    );
+  }
+
+  if (!results?.length) return next;
+  const refreshedSequence = { ...sequence, results };
+  if (sequence.index < 0) return { ...next, sequence: refreshedSequence };
+
+  const index = Math.min(sequence.index, results.length - 1);
+  const result = results[index];
+  const current = cloneValue(result.value);
+  current.semanticKind = semanticKindForLabel(result.label) ?? current.semanticKind;
+  const display = displayFor(current, preferences, result.label, result.note);
+  return {
+    ...next,
+    sequence: { ...refreshedSequence, index },
+    current,
+    display,
+    currentDisplayMetadata: displayMetadata(
+      current,
+      display,
+      'hvac',
+      next.angleDisplayMode,
+    ),
+    currentSourceExpression: undefined,
+    transformationSource: undefined,
+    transformationResultMetadata: undefined,
+    inputActive: false,
+    inputKind: undefined,
+  };
 }
 
 function reformatForPreferences(
   state: CalculatorState,
   preferences: Preferences,
 ): CalculatorState {
-  if (!state.current) return { ...state, preferences };
+  const refreshed = refreshPreferenceSensitiveSequence(state, preferences);
+  if (!refreshed.current) return refreshed;
 
-  const display = displayFor(state.current, preferences, state.display.label);
-  const currentDisplayMetadata = displayMetadata(
-    state.current,
-    display,
-    state.currentDisplayMetadata?.provenance ?? 'computed',
-    state.angleDisplayMode,
+  const display = displayFor(
+    refreshed.current,
+    preferences,
+    refreshed.display.label,
+    refreshed.display.note,
   );
-  let currentSourceExpression = cloneDisplayExpression(state.currentSourceExpression);
+  const currentDisplayMetadata = displayMetadata(
+    refreshed.current,
+    display,
+    refreshed.currentDisplayMetadata?.provenance ?? 'computed',
+    refreshed.angleDisplayMode,
+  );
+  let currentSourceExpression = cloneDisplayExpression(refreshed.currentSourceExpression);
   if (!currentSourceExpression?.length && currentDisplayMetadata.exactness === 'approximate') {
-    if (state.completedExpression.length) {
-      currentSourceExpression = cloneDisplayExpression(state.completedExpression);
-    } else if (displayCompletesValue(state.displayExpression.at(-1))) {
+    if (refreshed.completedExpression.length) {
+      currentSourceExpression = cloneDisplayExpression(refreshed.completedExpression);
+    } else if (displayCompletesValue(refreshed.displayExpression.at(-1))) {
       currentSourceExpression = cloneDisplayExpression(
-        trailingDisplayOperand(state.displayExpression),
+        trailingDisplayOperand(refreshed.displayExpression),
       );
     } else {
-      currentSourceExpression = [displayValueToken(state, state.current)];
+      currentSourceExpression = [displayValueToken(refreshed, refreshed.current)];
     }
   }
 
   return {
-    ...state,
+    ...refreshed,
     preferences,
     display,
     currentDisplayMetadata,
@@ -4124,44 +4521,84 @@ function specialKeyErrorHelp(
 ): string | undefined {
   const retry = (instruction: string) => `Press On/C. ${instruction}`;
 
+  if (state.modifier === 'recall-convert' && key === 'hip') {
+    return retry('Ir/Pitch recall: no irregular pitch is stored. Enter it first with Ir/Pitch / Conv+Hip/V.');
+  }
+  if (state.modifier === 'recall-convert') {
+    return retry('Recall convert: Hip/V recalls the stored irregular pitch; this key is not available in Recall Conv mode.');
+  }
+  if (state.modifier === 'recall') {
+    return retry('Recall: choose M+, M1, M2, M3, A, A new, B, B new, C, Pitch, Ir/Pitch, Riser, or Jack on-center.');
+  }
+
+  if (!converted && ['run', 'rise', 'diag', 'pitch', 'hip', 'jack'].includes(key)) {
+    const triangle = triangleForSolve(state);
+    const valueCount = Object.values(triangle).filter((value) => value !== undefined).length;
+    if (valueCount >= 2) {
+      try {
+        solveRightTriangle(triangle);
+      } catch {
+        return retry('Triangle: stored dimensions are incompatible. Diagonal must be longer than Run and Rise, and Pitch must be between 0° and 90°.');
+      }
+    }
+  }
+
+  const radius = state.circle.radius
+    ?? (state.circle.diameter === undefined ? undefined : state.circle.diameter / 2);
+  if (!converted && state.segmentRadiusReady && radius && radius > 0) {
+    const chord = state.circle.chord ?? state.triangle.x;
+    const rise = state.circle.rise ?? state.triangle.y;
+    if (key === 'rise' && chord !== undefined && (chord <= 0 || chord > 2 * radius)) {
+      return retry('Segment: chord must be positive and cannot exceed the stored diameter. Enter a valid chord with Run.');
+    }
+    if (key === 'run' && rise !== undefined && (rise <= 0 || rise > 2 * radius)) {
+      return retry('Segment: rise must be positive and cannot exceed twice the stored radius. Enter a valid rise with Rise.');
+    }
+  }
+
   if (converted) {
     if (key === 'run' || key === 'rise' || key === 'diag') {
       const law = key === 'run' ? 1 : key === 'rise' ? 2 : 3;
       return retry(
-        `Fan Law ${law}: store exactly three values with Conv+4 (A), Conv+7 (A new), Conv+5 (B), and Conv+8 (B new), then press Conv+${key === 'run' ? 'Run' : key === 'rise' ? 'Rise' : 'Diag'}.`,
+        `Fan Law ${law}: store exactly three values with A / Conv+4, A new / Conv+7, B / Conv+5, and B new / Conv+8, then use Fan Law ${law} / Conv+${key === 'run' ? 'Run' : key === 'rise' ? 'Rise' : 'Diag'}.`,
       );
     }
     if (key === 'pitch') {
-      return retry('Segment Radius: store Chord with Run and Rise with Rise, or enter a radius with a length unit, then press Conv+Pitch.');
+      const chord = state.circle.chord ?? state.triangle.x;
+      const rise = state.circle.rise ?? state.triangle.y;
+      if (state.segmentPairReady && (chord === undefined || rise === undefined || chord <= 0 || rise <= 0)) {
+        return retry('Segment Radius: chord and rise must both be positive. Correct Run or Rise, then use Seg Rad / Conv+Pitch.');
+      }
+      return retry('Segment Radius: store Chord with Run and Rise with Rise, or enter a radius, then use Seg Rad / Conv+Pitch. A bare number is treated as inches.');
     }
     if (key === 'hip') {
-      return retry('Ir/Pitch: enter pitch inches, degrees, or percent grade, then press Conv+Hip/V.');
+      return retry('Ir/Pitch: enter pitch inches, degrees, or percent grade, then use Ir/Pitch / Conv+Hip/V.');
     }
     if (key === 'circ') {
-      return retry('Arc: store a diameter with Circ or a radius with Conv+Pitch, then enter the arc angle or length and press Conv+Circ. Chord plus Rise can derive the angle.');
+      return retry('Arc: store a diameter with Circ or a radius with Seg Rad / Conv+Pitch. Enter an arc angle or length, or store a chord or rise, then use Arc / Conv+Circ.');
     }
     if (key === 'stair') {
-      return retry('Riser: enter a positive length, then press Conv+Stair to store it.');
+      return retry('Riser: enter a positive height, then use Riser / Conv+Stair to store it. A bare number is treated as inches.');
     }
     if (key === 'jack') {
-      return retry('Ir/Jack: store Run and Pitch, store Ir/Pitch with Conv+Hip/V, then press Conv+Jack.');
+      return retry('Ir/Jack: store Ir/Pitch with Ir/Pitch / Conv+Hip/V and any two compatible Run, Rise, Diagonal, or Pitch values, then use Ir/Jack / Conv+Jack.');
     }
     if (key === 'left') {
-      return retry('Offset: store X with Run, Y with Rise, and end A with Conv+4, then press Conv+(.');
+      return retry('Offset: store X with Run, Y with Rise, and end A with Conv+4, then press Offset / Conv+(.');
     }
     if (key === 'right') {
-      return retry('Column/Cone: store diameter with Circ (or radius with Conv+Pitch) and height with Rise, then press Conv+).');
+      return retry('Column/Cone: store diameter with Circ (or radius with Conv+Pitch) and height with Rise, then press Column / Conv+).');
     }
     if (key === '9') {
-      return retry('Law of Cosines: store sides with Conv+4 (A), Conv+5 (B), and Conv+6 (C), then press Conv+9.');
+      return retry('Law of Cosines: store sides with A / Conv+4, B / Conv+5, and C / Conv+6, then use LawCos / Conv+9.');
     }
     if (key === '0') {
-      return retry('VP/FPM: enter one nonnegative unitless value, then press Conv+0. Keep pressing 0 for the other conversions.');
+      return retry('VP/FPM: enter one nonnegative unitless value, then use VP ↔ FPM / Conv+0. Keep pressing 0 for the other conversions.');
     }
   }
 
   if (key === 'circ') {
-    return retry('Circle: enter a diameter and commit Feet, Inch, m, or mm before pressing Circ. Keep pressing Circ for circumference and area.');
+    return retry('Circle: enter a positive diameter, then press Circ. A bare number is treated as inches. Keep pressing Circ for circumference and area.');
   }
   if (key === 'hip') {
     return retry('Hip/V: store any two compatible values among Run, Rise, Diag, and Pitch, then press Hip/V repeatedly.');
@@ -4170,6 +4607,13 @@ function specialKeyErrorHelp(
     return retry('Jack: store any two compatible values among Run, Rise, Diag, and Pitch, then press Jack repeatedly.');
   }
   if (key === 'stair') {
+    if (state.triangle.x !== undefined || state.triangle.y !== undefined) {
+      try {
+        stairResults(state.triangle.y, state.triangle.x, state.preferences);
+      } catch {
+        return retry('Stair: the stored total Rise or Run is too small to form at least two risers and one tread. Enter a larger total Rise or Run.');
+      }
+    }
     return retry('Stair: store Rise or Run first, then press Stair repeatedly for all 15 results.');
   }
   if (key === 'pitch') {

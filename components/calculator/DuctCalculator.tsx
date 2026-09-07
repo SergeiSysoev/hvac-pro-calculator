@@ -5,6 +5,8 @@ import {
   DuctField,
   DuctUnitSystem,
   displayToImperialValue,
+  ductEntryCommaMode,
+  ductFlowRegimeNotice,
   formatDuctConvertedInput,
   imperialToDisplayValue,
   parseDuctEntry,
@@ -101,7 +103,7 @@ export default function DuctCalculator() {
     }
     const inputs: Partial<Record<DuctField, number>> = {};
     const invalidFields = manualOrder.filter((field) => {
-      const value = parseDuctEntry(rawValues[field]);
+      const value = parseDuctEntry(rawValues[field], ductEntryCommaMode(field, unitSystem));
       return value === undefined || value <= 0;
     });
     if (invalidFields.length) {
@@ -112,7 +114,10 @@ export default function DuctCalculator() {
       };
     }
     for (const field of manualOrder) {
-      const displayValue = parseDuctEntry(rawValues[field]);
+      const displayValue = parseDuctEntry(
+        rawValues[field],
+        ductEntryCommaMode(field, unitSystem),
+      );
       if (displayValue === undefined) continue;
       inputs[field] = displayToImperialValue(field, displayValue, unitSystem);
     }
@@ -136,8 +141,8 @@ export default function DuctCalculator() {
       ? rectangularEquivalents(result.solution.diameterIn, result.solution.airflowCfm)
       : []
   );
-  const lowReynoldsWarning = result.solution && result.solution.reynolds < 10_000
-    ? 'Low Reynolds number: transitional-flow estimates may be unreliable.'
+  const lowReynoldsWarning = result.solution
+    ? ductFlowRegimeNotice(result.solution.reynolds)
     : undefined;
   const ductStatusText = result.error ?? (result.solution
     ? `Solved. Edit any result to replace the oldest input.${lowReynoldsWarning ? ` ${lowReynoldsWarning}` : ''}`
@@ -164,7 +169,10 @@ export default function DuctCalculator() {
     setRawValues((current) => {
       const converted = { ...current };
       for (const field of manualOrder) {
-        const displayValue = parseDuctEntry(current[field]);
+        const displayValue = parseDuctEntry(
+          current[field],
+          ductEntryCommaMode(field, unitSystem),
+        );
         if (displayValue === undefined || displayValue <= 0) continue;
         const imperial = displayToImperialValue(field, displayValue, unitSystem);
         converted[field] = formatDuctConvertedInput(

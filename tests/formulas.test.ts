@@ -307,6 +307,20 @@ describe('published field-calculator guide examples', () => {
     expect(jacks.at(-1)).toMatchObject({ label: 'JK150', value: { amount: 0 } });
   });
 
+  it('shows the identical documented Jack members in reverse for ascending order', () => {
+    const descending = jackRafterResults(101, 7 / 12, DEFAULT_PREFERENCES)
+      .filter((result) => /^JK\d+$/.test(result.label))
+      .map((result) => result.value.amount);
+    const ascending = jackRafterResults(101, 7 / 12, {
+      ...DEFAULT_PREFERENCES,
+      jackOrder: 'ascending',
+    })
+      .filter((result) => /^JK\d+$/.test(result.label))
+      .map((result) => result.value.amount);
+
+    expect(ascending).toEqual([...descending].reverse());
+  });
+
   it('rejects unsafe Jack enumerations before allocating the result list', () => {
     expect(() => jackRafterResults(160_016, 7 / 12, DEFAULT_PREFERENCES)).toThrow('0-fL0');
   });
@@ -384,24 +398,16 @@ describe('published field-calculator guide examples', () => {
     expect(() => stairResults(1, undefined, DEFAULT_PREFERENCES)).toThrow('DIM Error');
   });
 
-  it('keeps an atypical stair-ratio warning on every result in the cycle', () => {
-    const atypical = stairResults(60, 20, DEFAULT_PREFERENCES);
-    expect(atypical).toHaveLength(15);
-    expect(atypical.every((result) => result.note === 'Steep/atypical stair ratio')).toBe(true);
+  it('warns when the calculated stair slope differs from the preferred rise/run ratio by more than 10%', () => {
+    // Official guide example: 10 ft 1 in Rise and 15 ft 5 in Run lights the yield indicator.
+    const overThreshold = stairResults(121, 185, DEFAULT_PREFERENCES);
+    expect(overThreshold).toHaveLength(15);
+    expect(overThreshold.every((result) => (
+      result.note === 'Calculated stair slope differs from the preferred rise/run ratio by more than 10%'
+    ))).toBe(true);
 
-    const proportional = stairResults(24, 12, {
-      ...DEFAULT_PREFERENCES,
-      desiredRiser: 10,
-      treadWidth: 10,
-    });
-    expect(proportional.every((result) => result.note === undefined)).toBe(true);
-
-    const overThreshold = stairResults(20, 9, {
-      ...DEFAULT_PREFERENCES,
-      desiredRiser: 10,
-      treadWidth: 10,
-    });
-    expect(overThreshold.every((result) => result.note === 'Steep/atypical stair ratio')).toBe(true);
+    const preferredRatio = stairResults(82.5, 100, DEFAULT_PREFERENCES);
+    expect(preferredRatio.every((result) => result.note === undefined)).toBe(true);
 
     const normal = stairResults(119, undefined, DEFAULT_PREFERENCES);
     expect(normal.every((result) => result.note === undefined)).toBe(true);
