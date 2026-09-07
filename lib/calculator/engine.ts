@@ -2360,13 +2360,26 @@ function enterPitch(state: CalculatorState): CalculatorState {
     } else {
       throw new CalcError('TYP Error');
     }
-    const theta = Math.atan(slope) * 180 / Math.PI;
+    const theta = startIndex === 1
+      ? input.value.amount
+      : Math.atan(slope) * 180 / Math.PI;
     const slopeApproximate = Boolean(
       input.value.approximate
       || (input.value.power === 0 && state.inputKind !== 'percent'),
     );
-    const recorded = recordTriangleInput(input.state, 'theta', theta, undefined, slopeApproximate);
+    const thetaApproximate = startIndex === 1
+      ? Boolean(input.value.approximate)
+      : slopeApproximate;
+    const recorded = recordTriangleInput(input.state, 'theta', theta, undefined, thetaApproximate);
     const results = pitchCycle({ x: 12, y: slope * 12 });
+    results[startIndex] = {
+      ...results[startIndex],
+      value: startIndex === 0
+        ? { ...cloneValue(input.value), unit: 'in', system: 'imperial' }
+        : startIndex === 1
+          ? degrees(input.value.amount)
+          : scalar(input.value.amount * 100),
+    };
     const resultApproximation = results.map((_, index) => Boolean(
       input.value.approximate
       || (slopeApproximate && index !== startIndex),

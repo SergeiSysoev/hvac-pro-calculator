@@ -11,6 +11,7 @@ import {
   jackRafterResults,
   segmentRise,
 } from '@/lib/calculator/formulas';
+import { calculatorExpressionView } from '@/lib/calculator/presentation';
 
 function run(keys: KeyId[], initial = initialCalculatorState()): CalculatorState {
   return keys.reduce(
@@ -197,6 +198,7 @@ describe('official Model 4090 special-key workflows', () => {
     const pitch = run(['3', '0', 'pitch']);
     expect(pitch.display.label).toBe('∠θ');
     expect(pitch.current?.approximate).toBeUndefined();
+    expect(calculatorExpressionView(pitch).expressionText).toBe('30°');
     expect(pitch.sequence?.results[0].value.approximate).toBe(true);
     expect(pitch.sequence?.results[1].value.approximate).toBeUndefined();
   });
