@@ -222,10 +222,9 @@ export function velocityPressureResults(input: number): NamedResult[] {
     { label: 'FPM', value: scalar(4005 * Math.sqrt(input)) },
     { label: 'VP', value: scalar((input / 4005) ** 2) },
     { label: 'MPS', value: scalar(1.3 * Math.sqrt(input)) },
-    // The published guide prints this numeric result as “KPA”, but its own
-    // 1.3 × √pressure equation uses pressure in pascals. Keep the documented
-    // numeric behavior and correct the unit label so the field value is safe.
-    { label: 'PA', value: scalar((input / 1.3) ** 2) },
+    // Preserve the Model 4090 display contract, including the label used by
+    // the guide for its published 147928.99 example.
+    { label: 'KPA', value: scalar((input / 1.3) ** 2) },
     { label: 'ENTRY', value: scalar(input) },
   ];
 }
@@ -242,7 +241,11 @@ export function segmentChord(radius: number, rise: number): number {
 
 export function segmentRise(radius: number, chord: number): number {
   if (radius <= 0 || chord < 0 || chord > 2 * radius) throw new CalcError('ENT Error');
-  return radius - Math.sqrt(radius ** 2 - (chord / 2) ** 2);
+  const halfChord = chord / 2;
+  const adjacent = Math.sqrt(radius ** 2 - halfChord ** 2);
+  // Rationalizing r - sqrt(r² - (c/2)²) avoids losing the rise when the
+  // radius is much larger than the chord.
+  return halfChord ** 2 / (radius + adjacent);
 }
 
 export function circleResults(circle: CircleValues): NamedResult[] {
@@ -301,6 +304,7 @@ export function columnConeResults(radius: number, height: number): NamedResult[]
     { label: 'COL', value: volumeValue(Math.PI * radius ** 2 * height) },
     { label: 'COL AREA', value: areaValue(2 * Math.PI * radius * height + 2 * Math.PI * radius ** 2) },
     { label: 'CONE', value: volumeValue(Math.PI * radius ** 2 * height / 3) },
+    // The Column/Cone key promises total surface area, so include the base.
     { label: 'CONE AREA', value: areaValue(Math.PI * radius * slant + Math.PI * radius ** 2) },
   ];
 }
@@ -336,6 +340,7 @@ export function jackRafterResults(
   preferences: Preferences,
   irregularSlope?: number,
   irregularFirst = false,
+  onCenterStored = true,
 ): NamedResult[] {
   if (
     run <= 0 || slope <= 0 || !Number.isFinite(run) || !Number.isFinite(slope)
@@ -346,25 +351,24 @@ export function jackRafterResults(
   const oppositeRun = irregularSlope ? rise / irregularSlope : run;
   const makeSide = (
     sideRun: number,
-    otherRun: number,
     sideSlope: number,
     prefix: 'JK' | 'IJ',
     cheek: number,
+    decrement: number,
   ): NamedResult[] => {
-    const spacingBasis = irregularSlope && preferences.irregularJackMode === 'mate'
-      ? oppositeRun
-      : otherRun;
-    const decrement = preferences.onCenter * sideRun / spacingBasis;
-    const values: NamedResult[] = [];
     if (!Number.isFinite(decrement) || decrement <= 0) throw new CalcError('ENT Error');
     const jackCount = Math.ceil(sideRun / decrement);
     if (jackCount > MAX_ENUMERATED_MEMBERS) throw new CalcError('0-fL0');
-    for (let index = 1; ; index += 1) {
-      const horizontal = Math.max(0, sideRun - index * decrement);
-      values.push({ label: `${prefix}${index}`, value: lengthValue(horizontal * Math.sqrt(1 + sideSlope ** 2)) });
-      if (horizontal === 0) break;
+    const values: NamedResult[] = [];
+    for (let index = 1; index <= jackCount; index += 1) {
+      const horizontal = preferences.jackOrder === 'ascending'
+        ? Math.min(sideRun, index * decrement)
+        : Math.max(0, sideRun - index * decrement);
+      values.push({
+        label: `${prefix}${index}`,
+        value: lengthValue(horizontal * Math.sqrt(1 + sideSlope ** 2)),
+      });
     }
-    if (preferences.jackOrder === 'ascending') values.reverse();
     const pitchAngle = Math.atan(sideSlope) * 180 / Math.PI;
     values.push(
       { label: 'PLMB', value: degrees(pitchAngle) },
@@ -375,13 +379,56 @@ export function jackRafterResults(
   };
 
   const regularCheek = Math.atan2(oppositeRun, run) * 180 / Math.PI;
-  const regular = makeSide(run, oppositeRun, slope, 'JK', irregularSlope ? 90 - regularCheek : 45);
+  const regularDecrement = irregularSlope === undefined
+    ? preferences.onCenter
+    : preferences.irregularJackMode === 'mate'
+      ? preferences.onCenter * run / Math.max(run, oppositeRun)
+      : preferences.onCenter * run / oppositeRun;
+  const regular = makeSide(
+    run,
+    slope,
+    'JK',
+    irregularSlope ? 90 - regularCheek : 45,
+    regularDecrement,
+  );
   if (!irregularSlope) {
-    return [{ label: 'JKOC', value: lengthValue(preferences.onCenter, 'in') }, ...regular];
+    return [{
+      label: onCenterStored ? 'JKOC STORED' : 'JKOC',
+      value: lengthValue(preferences.onCenter, 'in'),
+    }, ...regular];
   }
-  const irregular = makeSide(oppositeRun, run, irregularSlope, 'IJ', regularCheek);
-  const regularOc = { label: 'JKOC', value: lengthValue(preferences.onCenter, 'in') };
-  const irregularOc = { label: 'IJOC', value: lengthValue(preferences.onCenter, 'in') };
+  const irregularDecrement = preferences.irregularJackMode === 'mate'
+    ? preferences.onCenter * oppositeRun / Math.max(run, oppositeRun)
+    : preferences.onCenter * oppositeRun / run;
+  const irregular = makeSide(
+    oppositeRun,
+    irregularSlope,
+    'IJ',
+    regularCheek,
+    irregularDecrement,
+  );
+  const regularOcValue = preferences.irregularJackMode === 'mate'
+    ? irregularDecrement
+    : preferences.onCenter;
+  const irregularOcValue = preferences.irregularJackMode === 'mate'
+    ? regularDecrement
+    : preferences.onCenter;
+  const regularOcStored = onCenterStored && (
+    preferences.irregularJackMode === 'oc-oc'
+    || Math.abs(regularOcValue - preferences.onCenter) <= 1e-10
+  );
+  const irregularOcStored = onCenterStored && (
+    preferences.irregularJackMode === 'oc-oc'
+    || Math.abs(irregularOcValue - preferences.onCenter) <= 1e-10
+  );
+  const regularOc = {
+    label: regularOcStored ? 'JKOC STORED' : 'JKOC',
+    value: lengthValue(regularOcValue, 'in'),
+  };
+  const irregularOc = {
+    label: irregularOcStored ? 'IJOC STORED' : 'IJOC',
+    value: lengthValue(irregularOcValue, 'in'),
+  };
   return irregularFirst
     ? [irregularOc, ...irregular, regularOc, ...regular]
     : [regularOc, ...regular, irregularOc, ...irregular];
@@ -391,7 +438,13 @@ export function stairResults(
   rise: number | undefined,
   run: number | undefined,
   preferences: Preferences,
+  stored: { rise: boolean; run: boolean } = {
+    rise: rise !== undefined,
+    run: run !== undefined,
+  },
 ): NamedResult[] {
+  const riseStored = stored.rise;
+  const runStored = stored.run;
   if (rise === undefined && run === undefined) throw new CalcError('ERROR');
   if ((rise !== undefined && (!Number.isFinite(rise) || rise <= 0)) ||
       (run !== undefined && (!Number.isFinite(run) || run <= 0))) {
@@ -445,8 +498,8 @@ export function stairResults(
     { label: 'OPEN', value: lengthValue(opening) },
     { label: 'STRG', value: lengthValue(stringer) },
     { label: 'INCL', value: degrees(incline) },
-    { label: 'RUN', value: lengthValue(run) },
-    { label: 'RISE', value: lengthValue(rise) },
+    { label: runStored ? 'RUN (X) STORED' : 'RUN', value: lengthValue(run) },
+    { label: riseStored ? 'RISE (Y) STORED' : 'RISE', value: lengthValue(rise) },
     { label: 'R-HT STORED', value: lengthValue(preferences.desiredRiser, 'in') },
     { label: 'T-WD STORED', value: lengthValue(preferences.treadWidth, 'in') },
     { label: 'HDRM STORED', value: lengthValue(preferences.headroom, 'ft-in') },

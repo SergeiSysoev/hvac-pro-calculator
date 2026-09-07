@@ -216,7 +216,7 @@ describe('published field-calculator guide examples', () => {
 
   it('matches velocity pressure constants', () => {
     expect(velocityPressureResults(0.049).map((result) => result.label))
-      .toEqual(['FPM', 'VP', 'MPS', 'PA', 'ENTRY']);
+      .toEqual(['FPM', 'VP', 'MPS', 'KPA', 'ENTRY']);
     expect(velocityPressureResults(0.049)[0].value.amount).toBeCloseTo(886.5445, 4);
     expect(velocityPressureResults(0.123)[0].value.amount).toBeCloseTo(1404.608, 3);
     const from500 = velocityPressureResults(500);
@@ -341,21 +341,21 @@ describe('published field-calculator guide examples', () => {
       irregularFirst,
     )
       .map((result) => result.label)
-      .filter((label) => /^(?:JKOC|IJOC|JK\d+|IJ\d+)$/.test(label));
+      .filter((label) => /^(?:JKOC STORED|IJOC STORED|JK\d+|IJ\d+)$/.test(label));
 
     expect(jackLabels(false)).toEqual([
-      'JKOC', 'JK1', 'JK2', 'JK3',
-      'IJOC', 'IJ1', 'IJ2', 'IJ3',
+      'JKOC STORED', 'JK1', 'JK2', 'JK3',
+      'IJOC STORED', 'IJ1', 'IJ2', 'IJ3',
     ]);
     expect(jackLabels(true)).toEqual([
-      'IJOC', 'IJ1', 'IJ2', 'IJ3',
-      'JKOC', 'JK1', 'JK2', 'JK3',
+      'IJOC STORED', 'IJ1', 'IJ2', 'IJ3',
+      'JKOC STORED', 'JK1', 'JK2', 'JK3',
     ]);
   });
 
   it('keeps fixed on-center, riser, and tread dimensions in their documented units', () => {
     const jacks = jackRafterResults(48, 7 / 12, DEFAULT_PREFERENCES, 8 / 12);
-    expect(jacks.filter((result) => result.label.endsWith('OC')).map((result) => result.value.unit))
+    expect(jacks.filter((result) => result.label.includes('OC')).map((result) => result.value.unit))
       .toEqual(['in', 'in']);
     expect(arcResults({ radius: 30, arcLength: 39 }).find((result) => result.label === 'OC')?.value.unit)
       .toBe('in');
@@ -365,7 +365,8 @@ describe('published field-calculator guide examples', () => {
     expect(['R-HT', 'R+/−', 'T-WD', 'T+/−', 'R-HT STORED', 'T-WD STORED', 'FLOR STORED'].map(unit))
       .toEqual(['in', 'in', 'in', 'in', 'in', 'in', 'in']);
     expect(unit('HDRM STORED')).toBe('ft-in');
-    expect(['OPEN', 'STRG', 'RUN', 'RISE'].map(unit)).toEqual(['auto', 'auto', 'auto', 'auto']);
+    expect(['OPEN', 'STRG', 'RUN', 'RISE (Y) STORED'].map(unit))
+      .toEqual(['auto', 'auto', 'auto', 'auto']);
   });
 
   it('matches the rise-only stair example', () => {

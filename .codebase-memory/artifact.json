@@ -1,11 +1,11 @@
 {
     "schema_version": 2,
-    "commit": "4b6ad08ca5d07d4a34e0f2a21b60b4ecc8ad97dc",
-    "indexed_at": "2026-09-07T01:26:40Z",
+    "commit": "ba44db173fe6c5dd6bffa583d2d2d1f43df0df68",
+    "indexed_at": "2026-09-07T07:40:06Z",
     "project": "Users-assistant-hvac-pro-calc-4090",
-    "nodes": 524,
-    "edges": 2058,
-    "original_size": 3997696,
-    "compressed_size": 654228,
+    "nodes": 534,
+    "edges": 2109,
+    "original_size": 4063232,
+    "compressed_size": 668040,
     "compression_level": 3
 }

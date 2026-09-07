@@ -614,13 +614,14 @@ describe('modern calculator expression display', () => {
     expect(view.ariaText).toMatch(/^FPM\./);
   });
 
-  it('keeps the PA result precision shown by the engine', () => {
+  it('keeps the KPA result precision shown by the engine', () => {
     expect(calculatorExpressionView(run([
       '5', '0', '0', 'conv', '0', '0', '0', '0',
     ]))).toMatchObject({
-      contextText: 'PA',
+      contextText: 'KPA',
       expressionText: '≈147928.99',
-      ariaText: 'PA. approximately 147928.99',
+      progressText: '4/5 · 0 for next',
+      ariaText: 'KPA. approximately 147928.99. 4/5 · 0 for next',
     });
   });
 
@@ -1139,7 +1140,8 @@ describe('modern calculator expression display', () => {
     const velocity = run(['conv', '0'], approximate);
     expect(calculatorExpressionView(velocity)).toMatchObject({
       expressionText: '≈4005',
-      ariaText: 'FPM. approximately 4005',
+      progressText: '1/5 · 0 for next',
+      ariaText: 'FPM. approximately 4005. 1/5 · 0 for next',
     });
     expect(calculatorExpressionView(run(['multiply', '1', 'equals'], velocity)).resultSymbol)
       .toBe('≈');

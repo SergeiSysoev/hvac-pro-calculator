@@ -57,6 +57,7 @@ export default function CalculatorDisplay({
         <div className="expression-meta" aria-hidden="true">
           <span>{view.contextText}</span>
           <span className="expression-indicators">
+            {view.progressText ? <b className="sequence-progress">{view.progressText}</b> : null}
             {state.parenthesisDepth ? <b>{`(${state.parenthesisDepth}`}</b> : null}
             {hasMemory(state) ? <b>M</b> : null}
             {modifier ? <b>{modifier}</b> : null}

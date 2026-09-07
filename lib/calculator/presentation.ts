@@ -12,6 +12,7 @@ export interface CalculatorExpressionView {
   expressionText: string;
   resultText?: string;
   resultSymbol?: '=' | '≈';
+  progressText?: string;
   ariaText: string;
   entryActive: boolean;
 }
@@ -364,6 +365,29 @@ function displayContext(state: CalculatorState, hasCompletedExpression: boolean)
   return 'Ready';
 }
 
+function sequenceProgress(state: CalculatorState): string | undefined {
+  const sequence = state.sequence;
+  if (!sequence || state.display.label === 'ERROR') return undefined;
+  const triggerText: Partial<Record<string, string>> = {
+    run: 'Run',
+    rise: 'Rise',
+    diag: 'Diag',
+    pitch: 'Pitch',
+    hip: 'Hip/V',
+    circ: 'Circ',
+    stair: 'Stair',
+    jack: 'Jack',
+    left: '(',
+    right: ')',
+    '0': '0',
+    '9': '9',
+  };
+  const nextKey = triggerText[sequence.trigger] ?? sequence.trigger;
+  return sequence.index < 0
+    ? `${nextKey} for next`
+    : `${sequence.index + 1}/${sequence.results.length} · ${nextKey} for next`;
+}
+
 export function calculatorExpressionView(state: CalculatorState): CalculatorExpressionView {
   if (!state.powered) {
     return {
@@ -499,6 +523,7 @@ export function calculatorExpressionView(state: CalculatorState): CalculatorExpr
   const ariaText = genericContexts.has(contextText)
     ? equationAriaText
     : `${contextText}. ${equationAriaText}`;
+  const progressText = sequenceProgress(state);
 
   return {
     contextText,
@@ -511,7 +536,8 @@ export function calculatorExpressionView(state: CalculatorState): CalculatorExpr
         && (hasCompletedExpression || hasStandaloneUnary || hasImmediateSubexpression)
         ? resultIsApproximate ? '≈' : '='
         : undefined,
-    ariaText,
+    progressText,
+    ariaText: progressText ? `${ariaText}. ${progressText}` : ariaText,
     entryActive: Boolean(
       state.entry
       || state.fractionNumerator !== undefined

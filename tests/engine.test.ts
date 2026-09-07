@@ -42,6 +42,7 @@ describe('physical keypad workflow', () => {
     state.permanentPitchApproximate = true;
     state.irregularPitchSlope = 2 / 3;
     state.irregularPitchApproximate = true;
+    state.onCenterStored = true;
     state.onCenterApproximate = true;
     state.desiredRiserApproximate = true;
     const hydrated = calculatorReducer(initialCalculatorState(), {
@@ -55,6 +56,7 @@ describe('physical keypad workflow', () => {
     expect(hydrated).toMatchObject({
       permanentPitchApproximate: true,
       irregularPitchApproximate: true,
+      onCenterStored: true,
       onCenterApproximate: true,
       desiredRiserApproximate: true,
     });
@@ -189,7 +191,7 @@ describe('physical keypad workflow', () => {
     expect(second.display).toMatchObject({ valueText: '1 25/32', unitText: 'INCH' });
     expect(stored.display.label).toBe('M+');
     expect(recalled.display).toMatchObject({
-      label: 'M+',
+      label: 'M+ STORED',
       valueText: '103 1/32',
       unitText: 'INCH',
     });
@@ -428,7 +430,7 @@ describe('physical keypad workflow', () => {
     const stored = run([...digits('42'), 'conv', '1', 'on']);
     const recalled = run(['recall', '1'], stored);
     expect(recalled.current?.amount).toBe(42);
-    expect(recalled.display.label).toBe('M-1');
+    expect(recalled.display.label).toBe('M-1 STORED');
   });
 
   it('replaces unfinished numeric entry with constants and recalled values', () => {
@@ -827,7 +829,7 @@ describe('physical keypad workflow', () => {
     expect(continued.current?.amount).toBe(20);
   });
 
-  it('cycles VP, MPS, Pa and the original entry with plain 0', () => {
+  it('cycles VP, MPS, KPA and the original entry with plain 0', () => {
     const fpm = run([...digits('500'), 'conv', '0']);
     const vp = run(['0'], fpm);
     const mps = run(['0'], vp);
@@ -837,7 +839,7 @@ describe('physical keypad workflow', () => {
     expect(vp.current?.amount).toBeCloseTo(0.015586, 6);
     expect(vp.display.label).toBe('VP');
     expect(mps.display.label).toBe('MPS');
-    expect(kpa.display.label).toBe('PA');
+    expect(kpa.display.label).toBe('KPA');
     expect(entered.current?.amount).toBe(500);
     expect(entered.display.label).toBe('ENTRY');
   });
@@ -848,7 +850,7 @@ describe('physical keypad workflow', () => {
     const fpm = run(['5', '0', '0', 'conv', '0']);
     expect(fpm.display).toMatchObject({ label: 'FPM', valueText: '89554.52' });
     const kpa = run(['0', '0', '0'], fpm);
-    expect(kpa.display).toMatchObject({ label: 'PA', valueText: '147928.99' });
+    expect(kpa.display).toMatchObject({ label: 'KPA', valueText: '147928.99' });
 
     const area = run(['1', '1', 'inch', 'circ', 'circ', 'circ']);
     expect(area.display).toMatchObject({ label: 'AREA', valueText: '95.03318', unitText: 'SQ INCH' });
@@ -872,7 +874,7 @@ describe('physical keypad workflow', () => {
 
   it('restarts velocity conversion at FPM after full On/C and Off resets', () => {
     const atKpa = run([...digits('500'), 'conv', '0', '0', '0', '0']);
-    expect(atKpa.display.label).toBe('PA');
+    expect(atKpa.display.label).toBe('KPA');
 
     const afterFullClear = run(['on', 'on', ...digits('.049'), 'conv', '0'], atKpa);
     expect(afterFullClear.display.label).toBe('FPM');
