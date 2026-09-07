@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { CalculatorState, KeyId, calculatorReducer, initialCalculatorState } from '@/lib/calculator/engine';
+import {
+  CalculatorState,
+  KeyId,
+  calculatorReducer,
+  initialCalculatorState,
+  persistedState,
+} from '@/lib/calculator/engine';
 
 function run(keys: KeyId[], initial = initialCalculatorState()): CalculatorState {
   return keys.reduce((state, key) => calculatorReducer(state, { type: 'press', key }), initial);
@@ -10,6 +16,50 @@ function digits(value: string): KeyId[] {
 }
 
 describe('physical keypad workflow', () => {
+  it('runs direct converted buttons atomically even when Recall was armed', () => {
+    const recalled = run(['8', 'recall']);
+    const changedSign = calculatorReducer(recalled, {
+      type: 'press-converted',
+      key: 'subtract',
+    });
+    expect(changedSign.display.label).not.toBe('ERROR');
+    expect(changedSign.entry).toBe('-8');
+    expect(run(['equals'], changedSign).current?.amount).toBe(-8);
+    expect(changedSign.modifier).toBeUndefined();
+  });
+
+  it('round-trips approximate memory and exact source entry text safely', () => {
+    const state = initialCalculatorState();
+    state.memory.m1 = {
+      amount: 1000 / 3 / 25.4,
+      power: 1,
+      unit: 'm',
+      system: 'metric',
+      approximate: true,
+      source: { amount: 1 / 3, unit: 'm', power: 1, entryText: '1/3' },
+    };
+    state.permanentPitchSlope = 1 / 3;
+    state.permanentPitchApproximate = true;
+    state.irregularPitchSlope = 2 / 3;
+    state.irregularPitchApproximate = true;
+    state.onCenterApproximate = true;
+    state.desiredRiserApproximate = true;
+    const hydrated = calculatorReducer(initialCalculatorState(), {
+      type: 'hydrate',
+      payload: persistedState(state),
+    });
+    expect(hydrated.memory.m1).toMatchObject({
+      approximate: true,
+      source: { entryText: '1/3' },
+    });
+    expect(hydrated).toMatchObject({
+      permanentPitchApproximate: true,
+      irregularPitchApproximate: true,
+      onCenterApproximate: true,
+      desiredRiserApproximate: true,
+    });
+  });
+
   it('evaluates order of operations from key presses', () => {
     const state = run([
       ...digits('10'), 'add', ...digits('4'), 'multiply', ...digits('5'), 'equals',
@@ -777,7 +827,7 @@ describe('physical keypad workflow', () => {
     expect(continued.current?.amount).toBe(20);
   });
 
-  it('cycles VP, MPS, KPA and the original entry with plain 0', () => {
+  it('cycles VP, MPS, Pa and the original entry with plain 0', () => {
     const fpm = run([...digits('500'), 'conv', '0']);
     const vp = run(['0'], fpm);
     const mps = run(['0'], vp);
@@ -787,7 +837,7 @@ describe('physical keypad workflow', () => {
     expect(vp.current?.amount).toBeCloseTo(0.015586, 6);
     expect(vp.display.label).toBe('VP');
     expect(mps.display.label).toBe('MPS');
-    expect(kpa.display.label).toBe('KPA');
+    expect(kpa.display.label).toBe('PA');
     expect(entered.current?.amount).toBe(500);
     expect(entered.display.label).toBe('ENTRY');
   });
@@ -798,7 +848,7 @@ describe('physical keypad workflow', () => {
     const fpm = run(['5', '0', '0', 'conv', '0']);
     expect(fpm.display).toMatchObject({ label: 'FPM', valueText: '89554.52' });
     const kpa = run(['0', '0', '0'], fpm);
-    expect(kpa.display).toMatchObject({ label: 'KPA', valueText: '147928.99' });
+    expect(kpa.display).toMatchObject({ label: 'PA', valueText: '147928.99' });
 
     const area = run(['1', '1', 'inch', 'circ', 'circ', 'circ']);
     expect(area.display).toMatchObject({ label: 'AREA', valueText: '95.03318', unitText: 'SQ INCH' });
@@ -822,7 +872,7 @@ describe('physical keypad workflow', () => {
 
   it('restarts velocity conversion at FPM after full On/C and Off resets', () => {
     const atKpa = run([...digits('500'), 'conv', '0', '0', '0', '0']);
-    expect(atKpa.display.label).toBe('KPA');
+    expect(atKpa.display.label).toBe('PA');
 
     const afterFullClear = run(['on', 'on', ...digits('.049'), 'conv', '0'], atKpa);
     expect(afterFullClear.display.label).toBe('FPM');

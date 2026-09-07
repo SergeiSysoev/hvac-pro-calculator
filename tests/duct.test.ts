@@ -7,6 +7,7 @@ import {
   ductFrictionRate,
   ductReynolds,
   equivalentRoundDiameter,
+  formatDuctConvertedInput,
   imperialToDisplayValue,
   parseDuctEntry,
   promoteDuctInput,
@@ -228,6 +229,20 @@ describe('duct unit and shape helpers', () => {
     (field) => {
       const displayed = imperialToDisplayValue(field, 123.456, 'si');
       expect(displayToImperialValue(field, displayed, 'si')).toBeCloseTo(123.456, 10);
+    },
+  );
+
+  it.each<DuctField>(['airflowCfm', 'frictionRate', 'velocityFpm', 'diameterIn'])(
+    'does not lose a manual %s value through repeated unit-system toggles',
+    (field) => {
+      const original = 100.049;
+      const siText = formatDuctConvertedInput(
+        imperialToDisplayValue(field, original, 'si'),
+      );
+      const returnedText = formatDuctConvertedInput(
+        displayToImperialValue(field, Number(siText), 'si'),
+      );
+      expect(Number(returnedText)).toBeCloseTo(original, 9);
     },
   );
 

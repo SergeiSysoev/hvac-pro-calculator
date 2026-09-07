@@ -5,6 +5,7 @@ import {
   DuctField,
   DuctUnitSystem,
   displayToImperialValue,
+  formatDuctConvertedInput,
   imperialToDisplayValue,
   parseDuctEntry,
   promoteDuctInput,
@@ -135,6 +136,12 @@ export default function DuctCalculator() {
       ? rectangularEquivalents(result.solution.diameterIn, result.solution.airflowCfm)
       : []
   );
+  const lowReynoldsWarning = result.solution && result.solution.reynolds < 10_000
+    ? 'Low Reynolds number: transitional-flow estimates may be unreliable.'
+    : undefined;
+  const ductStatusText = result.error ?? (result.solution
+    ? `Solved. Edit any result to replace the oldest input.${lowReynoldsWarning ? ` ${lowReynoldsWarning}` : ''}`
+    : 'Enter any two values. The other two solve automatically.');
 
   const displayedValue = (field: DuctField): string => {
     if (manualOrder.includes(field)) return rawValues[field];
@@ -160,7 +167,9 @@ export default function DuctCalculator() {
         const displayValue = parseDuctEntry(current[field]);
         if (displayValue === undefined || displayValue <= 0) continue;
         const imperial = displayToImperialValue(field, displayValue, unitSystem);
-        converted[field] = formatInput(imperialToDisplayValue(field, imperial, next));
+        converted[field] = formatDuctConvertedInput(
+          imperialToDisplayValue(field, imperial, next),
+        );
       }
       return converted;
     });
@@ -223,11 +232,12 @@ export default function DuctCalculator() {
         })}
       </div>
 
-      <div className="duct-helper" aria-live="polite">
+      <div className="duct-helper">
         <span className="input-count">{manualOrder.length}/2</span>
         <p id={result.error ? DUCT_ERROR_ID : undefined}>{result.error ?? (result.solution
           ? 'Solved. Edit any result to replace the oldest input.'
           : 'Enter any two values. The other two solve automatically.')}</p>
+        <span className="visually-hidden" role="status" aria-live="polite">{ductStatusText}</span>
       </div>
 
       <button type="button" className="clear-duct" onClick={clearAll}>Clear all</button>
@@ -269,8 +279,8 @@ export default function DuctCalculator() {
         )}
       </div>
 
-      {result.solution && result.solution.reynolds < 10_000 ? (
-        <p className="duct-warning">Low Reynolds number: transitional-flow estimates may be unreliable.</p>
+      {lowReynoldsWarning ? (
+        <p className="duct-warning">{lowReynoldsWarning}</p>
       ) : null}
       <p className="duct-assumption">Straight average sheet-metal duct · standard air · internal dimensions. Add fitting and equipment losses separately.</p>
     </section>

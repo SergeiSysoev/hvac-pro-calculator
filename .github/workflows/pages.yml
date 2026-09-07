@@ -31,11 +31,11 @@ jobs:
       - run: npm run lint
       - run: npx tsc --noEmit
       - run: npm run build:pages
-      - run: test -f out/index.html
+      - run: test -f .next-pages/index.html
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v4
         with:
-          path: out
+          path: .next-pages
 
   deploy:
     environment:

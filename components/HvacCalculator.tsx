@@ -61,6 +61,43 @@ const INTERACTIVE_KEY_TARGETS = [
   '[tabindex]:not([tabindex="-1"])',
 ].join(', ');
 
+const TEXT_ENTRY_KEY_TARGETS = [
+  'input:not([type="hidden"])',
+  'select',
+  'textarea',
+  '[contenteditable]:not([contenteditable="false"])',
+  '[role="textbox"]',
+  '[role="combobox"]',
+  '[role="spinbutton"]',
+].join(', ');
+
+const CAROUSEL_GESTURE_EXCLUSION_TARGETS = [
+  'button',
+  'a[href]',
+  'input:not([type="hidden"])',
+  'select',
+  'textarea',
+  'label',
+  'option',
+  'summary',
+  '[controls]',
+  '[contenteditable]:not([contenteditable="false"])',
+  '[role="button"]',
+  '[role="link"]',
+  '[role="checkbox"]',
+  '[role="radio"]',
+  '[role="switch"]',
+  '[role="slider"]',
+  '[role="spinbutton"]',
+  '[role="textbox"]',
+  '[role="combobox"]',
+  '[role="menuitem"]',
+  '[role="option"]',
+].join(', ');
+
+const ACTIVE_CALCULATOR_KEYBOARD_SCOPE = '[data-calculator-keyboard-scope="active"]';
+const RELEASE_VELOCITY_MEMORY_MS = 120;
+
 type KeyboardEventTarget = EventTarget & {
   closest?: (selector: string) => Element | null;
   isContentEditable?: boolean;
@@ -74,12 +111,73 @@ export function isInteractiveKeyboardTarget(target: EventTarget | null): boolean
     && candidate.closest(INTERACTIVE_KEY_TARGETS) !== null;
 }
 
+export function isTextEntryKeyboardTarget(target: EventTarget | null): boolean {
+  if (!target) return false;
+  const candidate = target as KeyboardEventTarget;
+  if (candidate.isContentEditable) return true;
+  return typeof candidate.closest === 'function'
+    && candidate.closest(TEXT_ENTRY_KEY_TARGETS) !== null;
+}
+
+export function isCarouselGestureControl(target: EventTarget | null): boolean {
+  if (!target) return false;
+  const candidate = target as KeyboardEventTarget;
+  if (candidate.isContentEditable) return true;
+  return typeof candidate.closest === 'function'
+    && candidate.closest(CAROUSEL_GESTURE_EXCLUSION_TARGETS) !== null;
+}
+
+export function isCalculatorKeyboardScopeTarget(target: EventTarget | null): boolean {
+  if (!target) return false;
+  const candidate = target as KeyboardEventTarget;
+  return typeof candidate.closest === 'function'
+    && candidate.closest(ACTIVE_CALCULATOR_KEYBOARD_SCOPE) !== null;
+}
+
+export function releasePointerVelocity(
+  previousVelocity: number,
+  lastX: number,
+  lastTime: number,
+  releaseX: number,
+  releaseTime: number,
+): number {
+  if (![previousVelocity, lastX, lastTime, releaseX, releaseTime].every(Number.isFinite)) return 0;
+  const elapsed = Math.max(releaseTime - lastTime, 1);
+  const releaseSample = (releaseX - lastX) / elapsed * 1000;
+  const historyWeight = Math.max(0, 1 - elapsed / RELEASE_VELOCITY_MEMORY_MS);
+  return previousVelocity * historyWeight + releaseSample * (1 - historyWeight);
+}
+
+export function carouselOffsetForPointer(
+  baseOffset: number,
+  startX: number,
+  pointerX: number,
+  width: number,
+  pageCount: number,
+): number {
+  const minimum = -Math.max(0, pageCount - 1) * width;
+  let next = baseOffset + pointerX - startX;
+  if (next > 0) next = rubberBandDistance(next, width);
+  if (next < minimum) next = minimum + rubberBandDistance(next - minimum, width);
+  return next;
+}
+
 export function calculatorKeyForKeyboardEvent(
   eventKey: string,
   target: EventTarget | null,
   activeElement: EventTarget | null,
 ): KeyId | undefined {
-  if (isInteractiveKeyboardTarget(target) || isInteractiveKeyboardTarget(activeElement)) {
+  const nativeActivation = eventKey === 'Enter' || eventKey === ' ';
+  if (
+    !isCalculatorKeyboardScopeTarget(target)
+    || !isCalculatorKeyboardScopeTarget(activeElement)
+    || isTextEntryKeyboardTarget(target)
+    || isTextEntryKeyboardTarget(activeElement)
+    || (
+      nativeActivation
+      && (isInteractiveKeyboardTarget(target) || isInteractiveKeyboardTarget(activeElement))
+    )
+  ) {
     return undefined;
   }
   return KEYBOARD_MAP[eventKey];
@@ -132,7 +230,7 @@ function tradeKeys(accuracy: number): KeyFace[] {
     { id: 't-back', label: '←', key: 'backspace', tone: 'dark' },
     { id: 't-feet', label: 'Feet', key: 'feet', tone: 'dark' },
     { id: 't-0', label: '0', key: '0', tone: 'number' },
-    { id: 't-decimal', label: '•', key: 'decimal', tone: 'number' },
+    { id: 't-decimal', label: '.', key: 'decimal', tone: 'number' },
     { id: 't-equals', label: '=', key: 'equals', tone: 'number' },
     { id: 't-add', label: '+', key: 'add', tone: 'dark' },
 
@@ -272,10 +370,10 @@ export default function HvacCalculator() {
   }, []);
 
   const press = useCallback((key: KeyId, forceConverted = false) => {
-    if (forceConverted && state.modifier !== 'convert') dispatch({ type: 'press', key: 'conv' });
-    dispatch({ type: 'press', key });
+    if (forceConverted) dispatch({ type: 'press-converted', key });
+    else dispatch({ type: 'press', key });
     if ('vibrate' in navigator) navigator.vibrate?.(7);
-  }, [state.modifier]);
+  }, []);
 
   const factoryReset = useCallback(() => {
     dispatch({ type: 'factory-reset' });
@@ -309,10 +407,11 @@ export default function HvacCalculator() {
       }
       if (state.preferencesOpen || activePage === 2) return;
 
-      // The reset chord remains available after clicking Off (the Off button
-      // retains focus, so the regular global keyboard mapper intentionally
-      // ignores it as an interactive target).
-      if (!state.powered && event.key === '*') {
+      const calculatorFocused = isCalculatorKeyboardScopeTarget(event.target)
+        && isCalculatorKeyboardScopeTarget(document.activeElement);
+
+      // Handle the deliberate Off-state reset chord before ordinary shortcuts.
+      if (!state.powered && event.key === '*' && calculatorFocused) {
         event.preventDefault();
         resetMultiplyHeld = true;
         return;
@@ -387,7 +486,7 @@ export default function HvacCalculator() {
   );
 
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!event.isPrimary || event.button !== 0) return;
+    if (!event.isPrimary || event.button !== 0 || isCarouselGestureControl(event.target)) return;
     dragState.current = {
       pointerId: event.pointerId,
       startX: event.clientX,
@@ -429,12 +528,13 @@ export default function HvacCalculator() {
     drag.lastX = event.clientX;
     drag.lastTime = now;
 
-    const width = viewportWidth.current;
-    const minimum = -(PAGE_NAMES.length - 1) * width;
-    let next = drag.baseOffset + deltaX;
-    if (next > 0) next = rubberBandDistance(next, width);
-    if (next < minimum) next = minimum + rubberBandDistance(next - minimum, width);
-    setTrackOffset(next);
+    setTrackOffset(carouselOffsetForPointer(
+      drag.baseOffset,
+      drag.startX,
+      event.clientX,
+      viewportWidth.current,
+      PAGE_NAMES.length,
+    ));
   };
 
   const finishPointer = (event: ReactPointerEvent<HTMLDivElement>, cancelled = false) => {
@@ -446,11 +546,30 @@ export default function HvacCalculator() {
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
-    const velocity = cancelled ? 0 : drag.velocity;
+    const releaseTime = performance.now();
+    const releaseOffset = cancelled
+      ? trackOffsetRef.current
+      : carouselOffsetForPointer(
+        drag.baseOffset,
+        drag.startX,
+        event.clientX,
+        viewportWidth.current,
+        PAGE_NAMES.length,
+      );
+    if (!cancelled) setTrackOffset(releaseOffset);
+    const velocity = cancelled
+      ? 0
+      : releasePointerVelocity(
+        drag.velocity,
+        drag.lastX,
+        drag.lastTime,
+        event.clientX,
+        releaseTime,
+      );
     const target = cancelled
       ? activePageRef.current
       : projectedPageIndex(
-        trackOffsetRef.current,
+        releaseOffset,
         velocity,
         viewportWidth.current,
         PAGE_NAMES.length,
@@ -481,7 +600,14 @@ export default function HvacCalculator() {
           className={`carousel-track ${dragging ? 'is-dragging' : ''}`}
           style={{ transform: `translate3d(${trackOffset}px, 0, 0)` }}
         >
-          <section className="calculator-page" aria-label="Professional HVAC calculator" aria-hidden={activePage !== 0} inert={activePage !== 0}>
+          <section
+            className="calculator-page"
+            aria-label="Professional HVAC calculator"
+            aria-hidden={activePage !== 0}
+            data-calculator-keyboard-scope={activePage === 0 ? 'active' : undefined}
+            inert={activePage !== 0}
+            tabIndex={activePage === 0 ? 0 : -1}
+          >
             <div className="page-scroll physical-page">
               <PhysicalCalculator
                 active={activePage === 0}
@@ -492,7 +618,14 @@ export default function HvacCalculator() {
             </div>
           </section>
 
-          <section className="calculator-page" aria-label="Trade calculator" aria-hidden={activePage !== 1} inert={activePage !== 1}>
+          <section
+            className="calculator-page"
+            aria-label="Trade calculator"
+            aria-hidden={activePage !== 1}
+            data-calculator-keyboard-scope={activePage === 1 ? 'active' : undefined}
+            inert={activePage !== 1}
+            tabIndex={activePage === 1 ? 0 : -1}
+          >
             <div className="page-scroll keypad-page">
               <div className="page-title-row">
                 <div>

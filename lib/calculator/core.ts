@@ -25,12 +25,16 @@ export interface CalcValue {
   angle?: boolean;
   unit: UnitHint;
   system: MeasurementSystem;
+  /** True when a prior numeric operation could not retain the exact mathematical value. */
+  approximate?: boolean;
   /** Finest supported binary-inch denominator explicitly used by the operator. */
   fractionDenominator?: FractionResolution;
   source?: {
     amount: number;
     unit: 'ft' | 'in' | 'm' | 'mm';
     power: number;
+    /** Exact coefficient as entered, retained while the unit key cycles powers. */
+    entryText?: string;
   };
 }
 
@@ -195,6 +199,58 @@ function combinedFractionDenominator(
   return denominator ? denominator as FractionResolution : undefined;
 }
 
+function integerOperationLosesPrecision(
+  a: number,
+  operator: Operator,
+  b: number,
+  result: number,
+): boolean {
+  if (
+    !Number.isFinite(a)
+    || !Number.isFinite(b)
+    || !Number.isFinite(result)
+    || !Number.isInteger(a)
+    || !Number.isInteger(b)
+    || !Number.isInteger(result)
+  ) return false;
+  const left = BigInt(a);
+  const right = BigInt(b);
+  let exact: bigint;
+  if (operator === '+') exact = left + right;
+  else if (operator === '-') exact = left - right;
+  else if (operator === '*') exact = left * right;
+  else {
+    if (right === BigInt(0) || left % right !== BigInt(0)) return false;
+    exact = left / right;
+  }
+  return BigInt(result) !== exact;
+}
+
+function operationIsApproximate(
+  a: CalcValue,
+  operator: Operator,
+  b: CalcValue,
+  result: number,
+): boolean {
+  if (a.approximate || b.approximate) return true;
+  if (!Number.isFinite(result)) return true;
+  if (operator === '+' && (
+    (b.amount !== 0 && result === a.amount)
+    || (a.amount !== 0 && result === b.amount)
+  )) return true;
+  if (operator === '-' && (
+    (b.amount !== 0 && result === a.amount)
+    || (a.amount !== 0 && result === -b.amount)
+  )) return true;
+  if (
+    (operator === '*' || operator === '/')
+    && a.amount !== 0
+    && b.amount !== 0
+    && result === 0
+  ) return true;
+  return integerOperationLosesPrecision(a.amount, operator, b.amount, result);
+}
+
 export function operate(a: CalcValue, operator: Operator, b: CalcValue): CalcValue {
   if (operator === '+' || operator === '-') {
     if (!compatibleForAdd(a, b)) throw new CalcError('DIM Error');
@@ -209,6 +265,7 @@ export function operate(a: CalcValue, operator: Operator, b: CalcValue): CalcVal
       angle: a.angle || b.angle || undefined,
       unit,
       system: combinedSystem(a, b),
+      approximate: operationIsApproximate(a, operator, b, amount) || undefined,
       fractionDenominator: a.power === 1 ? combinedFractionDenominator(a, b) : undefined,
       source: a.power > 0 && sourceUnit
         ? {
@@ -223,10 +280,20 @@ export function operate(a: CalcValue, operator: Operator, b: CalcValue): CalcVal
   if (operator === '/' && b.amount === 0) throw new CalcError('DIV Error');
   if (a.angle || b.angle) {
     if (a.angle && b.power === 0 && !b.angle) {
-      return { ...a, amount: operator === '*' ? a.amount * b.amount : a.amount / b.amount };
+      const amount = operator === '*' ? a.amount * b.amount : a.amount / b.amount;
+      return {
+        ...a,
+        amount,
+        approximate: operationIsApproximate(a, operator, b, amount) || undefined,
+      };
     }
     if (b.angle && a.power === 0 && !a.angle && operator === '*') {
-      return { ...b, amount: a.amount * b.amount };
+      const amount = a.amount * b.amount;
+      return {
+        ...b,
+        amount,
+        approximate: operationIsApproximate(a, operator, b, amount) || undefined,
+      };
     }
     throw new CalcError('TYP Error');
   }
@@ -236,21 +303,27 @@ export function operate(a: CalcValue, operator: Operator, b: CalcValue): CalcVal
     return {
       ...a,
       amount,
+      approximate: operationIsApproximate(a, operator, b, amount) || undefined,
       unit: standardComputedUnit(a.unit),
       source: a.source
         ? {
             ...a.source,
             amount: operator === '*' ? a.source.amount * b.amount : a.source.amount / b.amount,
+            entryText: undefined,
           }
         : undefined,
     };
   }
   if (operator === '*' && a.power === 0 && b.power > 0) {
+    const amount = a.amount * b.amount;
     return {
       ...b,
-      amount: a.amount * b.amount,
+      amount,
+      approximate: operationIsApproximate(a, operator, b, amount) || undefined,
       unit: standardComputedUnit(b.unit),
-      source: b.source ? { ...b.source, amount: a.amount * b.source.amount } : undefined,
+      source: b.source
+        ? { ...b.source, amount: a.amount * b.source.amount, entryText: undefined }
+        : undefined,
     };
   }
 
@@ -265,24 +338,54 @@ export function operate(a: CalcValue, operator: Operator, b: CalcValue): CalcVal
   if (power > 0 && resultUnit) {
     const amount = operator === '*' ? a.amount * b.amount : a.amount / b.amount;
     const sourceAmount = amount / measurement(1, resultUnit, power).amount;
-    return measurement(sourceAmount, resultUnit, power);
+    const value = measurement(sourceAmount, resultUnit, power);
+    value.approximate = operationIsApproximate(a, operator, b, amount) || undefined;
+    return value;
   }
+  const amount = operator === '*' ? a.amount * b.amount : a.amount / b.amount;
   return {
-    amount: operator === '*' ? a.amount * b.amount : a.amount / b.amount,
+    amount,
     power,
     unit: 'auto',
     system,
+    approximate: operationIsApproximate(a, operator, b, amount) || undefined,
   };
+}
+
+function powerOperationIsApproximate(value: CalcValue, exponent: 2 | 3, result: number): boolean {
+  if (value.approximate) return true;
+  if (value.amount !== 0 && result === 0) return true;
+  if (
+    Number.isFinite(value.amount)
+    && Number.isFinite(result)
+    && Number.isInteger(value.amount)
+    && Number.isInteger(result)
+  ) {
+    return BigInt(result) !== BigInt(value.amount) ** BigInt(exponent);
+  }
+  return false;
 }
 
 export function square(value: CalcValue): CalcValue {
   if (value.angle || value.power * 2 > 3) throw new CalcError('DIM Error');
-  return transformedDimensionalValue(value, value.amount ** 2, value.power * 2);
+  const amount = value.amount ** 2;
+  return transformedDimensionalValue(
+    value,
+    amount,
+    value.power * 2,
+    powerOperationIsApproximate(value, 2, amount),
+  );
 }
 
 export function cube(value: CalcValue): CalcValue {
   if (value.angle || value.power * 3 > 3) throw new CalcError('DIM Error');
-  return transformedDimensionalValue(value, value.amount ** 3, value.power * 3);
+  const amount = value.amount ** 3;
+  return transformedDimensionalValue(
+    value,
+    amount,
+    value.power * 3,
+    powerOperationIsApproximate(value, 3, amount),
+  );
 }
 
 function baseUnitFromHint(unit: UnitHint): 'ft' | 'in' | 'm' | 'mm' | undefined {
@@ -293,21 +396,28 @@ function baseUnitFromHint(unit: UnitHint): 'ft' | 'in' | 'm' | 'mm' | undefined 
   return undefined;
 }
 
-function transformedDimensionalValue(value: CalcValue, amount: number, power: number): CalcValue {
+function transformedDimensionalValue(
+  value: CalcValue,
+  amount: number,
+  power: number,
+  approximate = Boolean(value.approximate),
+): CalcValue {
   const baseUnit = value.source?.unit
     ?? baseUnitFromHint(value.unit)
     ?? (value.power > 0 && value.system === 'metric' ? 'm' : undefined)
     ?? (value.power > 0 && value.system === 'imperial' ? 'ft' : undefined);
   if (baseUnit && power > 0) {
     const factors = { ft: 12, in: 1, m: 1000 / 25.4, mm: 1 / 25.4 };
-    return measurement(amount / factors[baseUnit] ** power, baseUnit, power);
+    const transformed = measurement(amount / factors[baseUnit] ** power, baseUnit, power);
+    transformed.approximate = approximate || undefined;
+    return transformed;
   }
-  return { amount, power, unit: 'auto', system: value.system };
+  return { amount, power, unit: 'auto', system: value.system, approximate: approximate || undefined };
 }
 
 export function squareRoot(value: CalcValue): CalcValue {
   if (value.angle || value.amount < 0 || value.power % 2 !== 0) {
-    throw new CalcError(value.amount < 0 ? 'ENT Error' : 'DIM Error');
+    throw new CalcError(value.amount < 0 ? 'ROOT Error' : 'DIM Error');
   }
   return transformedDimensionalValue(value, Math.sqrt(value.amount), value.power / 2);
 }
@@ -389,9 +499,20 @@ export function evaluateExpression(
 export function percentValue(left: CalcValue, operator: Operator, percent: number): CalcValue {
   const ratio = percent / 100;
   if (operator === '+' || operator === '-') {
-    return { ...left, amount: left.amount * ratio, source: undefined };
+    const amount = left.amount * ratio;
+    return {
+      ...left,
+      amount,
+      approximate: Boolean(
+        left.approximate
+        || (left.amount !== 0 && ratio !== 0 && amount === 0),
+      ) || undefined,
+      source: undefined,
+    };
   }
-  return scalar(ratio);
+  const value = scalar(ratio);
+  value.approximate = left.approximate || undefined;
+  return value;
 }
 
 function gcd(a: number, b: number): number {

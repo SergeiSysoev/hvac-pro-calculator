@@ -222,7 +222,10 @@ export function velocityPressureResults(input: number): NamedResult[] {
     { label: 'FPM', value: scalar(4005 * Math.sqrt(input)) },
     { label: 'VP', value: scalar((input / 4005) ** 2) },
     { label: 'MPS', value: scalar(1.3 * Math.sqrt(input)) },
-    { label: 'KPA', value: scalar((input / 1.3) ** 2) },
+    // The published guide prints this numeric result as “KPA”, but its own
+    // 1.3 × √pressure equation uses pressure in pascals. Keep the documented
+    // numeric behavior and correct the unit label so the field value is safe.
+    { label: 'PA', value: scalar((input / 1.3) ** 2) },
     { label: 'ENTRY', value: scalar(input) },
   ];
 }

@@ -22,9 +22,14 @@ interface CalculatorKeypadProps {
 }
 
 export function accessibleKeyLabel(face: KeyFace): string {
+  const purpose = face.key === 'backspace'
+    ? 'Backspace'
+    : face.key === 'fraction'
+      ? 'Fraction bar'
+      : face.label;
   const detail = face.detail ? ` ${face.detail}` : '';
   const converted = face.secondary ? `; Conv function ${face.secondary}` : '';
-  return `${face.label}${detail}${converted}`;
+  return `${purpose}${detail}${converted}`;
 }
 
 export default function CalculatorKeypad({

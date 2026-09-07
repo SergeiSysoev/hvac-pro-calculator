@@ -1,14 +1,29 @@
 import { describe, expect, it } from 'vitest';
-import { calculatorKeyForKeyboardEvent } from '../components/HvacCalculator';
 import {
-  PHYSICAL_KEY_ROWS,
-  lcdValueSizeClass,
-} from '../components/calculator/PhysicalCalculator';
+  calculatorKeyForKeyboardEvent,
+  isCalculatorKeyboardScopeTarget,
+} from '../components/HvacCalculator';
+import { PHYSICAL_KEY_ROWS } from '../components/calculator/PhysicalCalculator';
+import { expressionSizeClass } from '../components/calculator/CalculatorDisplay';
 import { accessibleKeyLabel } from '../components/calculator/CalculatorKeypad';
-import { splitLcdValueText } from '../components/calculator/LcdValue';
+import { splitExpressionText } from '../components/calculator/ExpressionText';
 
-const keyboardTarget = (interactive: boolean, editable = false): EventTarget => ({
-  closest: () => interactive ? ({} as Element) : null,
+const keyboardTarget = (
+  kind: 'background' | 'button' | 'input',
+  editable = false,
+  inCalculator = false,
+): EventTarget => ({
+  closest: (selector: string) => {
+    if (selector === '[data-calculator-keyboard-scope="active"]') {
+      return inCalculator ? ({} as Element) : null;
+    }
+    if (kind === 'background') return null;
+    const selectors = selector.split(', ').map((item) => item.trim());
+    const matches = kind === 'button'
+      ? selectors.includes('button')
+      : selectors.some((item) => item.startsWith('input'));
+    return matches ? ({} as Element) : null;
+  },
   isContentEditable: editable,
 }) as unknown as EventTarget;
 
@@ -42,51 +57,72 @@ describe('physical HVAC keypad layout', () => {
     expect(keys.equals.secondary).toBe('Prefs');
   });
 
-  it('compacts only long LCD values that need the narrow-screen digit budget', () => {
-    expect(lcdValueSizeClass('147928.99')).toBe('');
-    expect(lcdValueSizeClass('19999999.99')).toBe('lcd-value-compact');
-    expect(lcdValueSizeClass('123456789012')).toBe('lcd-value-dense');
-    expect(lcdValueSizeClass('-19999999.99')).toBe('lcd-value-dense');
+  it('scales long written expressions without hiding their content', () => {
+    expect(expressionSizeClass('8′ 2 3/8″ + 1′')).toBe('');
+    expect(expressionSizeClass('123456789012345678901234')).toBe('expression-text-medium');
+    expect(expressionSizeClass('12345678901234567890123456789012345678')).toBe('expression-text-small');
   });
 
-  it('renders entered and calculated fractions as the original stacked LCD group', () => {
-    expect(splitLcdValueText('23 - 4 5/8')).toEqual([
-      '23 - 4 ',
+  it('renders written fractions as legible typographic groups', () => {
+    expect(splitExpressionText('23′ 4 5/8″')).toEqual([
+      '23′ 4 ',
       { numerator: '5', denominator: '8' },
+      '″',
     ]);
-    expect(splitLcdValueText('1/16')).toEqual([
+    expect(splitExpressionText('1/…″')).toEqual([
+      { numerator: '1', denominator: '…' },
+      '″',
+    ]);
+    expect(splitExpressionText('1/16″')).toEqual([
       { numerator: '1', denominator: '16' },
+      '″',
     ]);
   });
 
-  it('renders scientific notation as the original raised LCD exponent', () => {
-    expect(splitLcdValueText('2.17000e10')).toEqual([
+  it('renders scientific notation and entered powers with a raised exponent', () => {
+    expect(splitExpressionText('2.17000e10')).toEqual([
       '2.17000',
       { exponent: '10' },
     ]);
-    expect(splitLcdValueText('1.25000e-9')).toEqual([
+    expect(splitExpressionText('1.25000e-9')).toEqual([
       '1.25000',
       { exponent: '−9' },
+    ]);
+    expect(splitExpressionText('10^3')).toEqual([
+      '10',
+      { exponent: '3' },
     ]);
   });
 });
 
 describe('hardware keyboard routing', () => {
-  it('keeps calculator shortcuts on non-interactive page background', () => {
-    const background = keyboardTarget(false);
-    expect(calculatorKeyForKeyboardEvent('7', background, background)).toBe('7');
-    expect(calculatorKeyForKeyboardEvent('Enter', background, background)).toBe('equals');
+  it('enables shortcuts only while the active calculator region has focus', () => {
+    const calculator = keyboardTarget('background', false, true);
+    const body = keyboardTarget('background');
+    const navDot = keyboardTarget('button');
+    const unrelatedButton = keyboardTarget('button');
+
+    expect(isCalculatorKeyboardScopeTarget(calculator)).toBe(true);
+    expect(calculatorKeyForKeyboardEvent('7', calculator, calculator)).toBe('7');
+    expect(calculatorKeyForKeyboardEvent('+', calculator, calculator)).toBe('add');
+    expect(calculatorKeyForKeyboardEvent('Enter', calculator, calculator)).toBe('equals');
+    expect(calculatorKeyForKeyboardEvent('7', body, body)).toBeUndefined();
+    expect(calculatorKeyForKeyboardEvent('+', navDot, navDot)).toBeUndefined();
+    expect(calculatorKeyForKeyboardEvent('=', unrelatedButton, unrelatedButton)).toBeUndefined();
   });
 
   it('leaves Enter and Space activation to interactive targets and focus', () => {
-    const background = keyboardTarget(false);
-    const interactive = keyboardTarget(true);
-    const editable = keyboardTarget(false, true);
+    const calculator = keyboardTarget('background', false, true);
+    const interactive = keyboardTarget('button', false, true);
+    const editable = keyboardTarget('input', true, true);
 
-    expect(calculatorKeyForKeyboardEvent('Enter', interactive, background)).toBeUndefined();
-    expect(calculatorKeyForKeyboardEvent('Enter', background, interactive)).toBeUndefined();
-    expect(calculatorKeyForKeyboardEvent(' ', interactive, background)).toBeUndefined();
-    expect(calculatorKeyForKeyboardEvent('Enter', editable, background)).toBeUndefined();
+    expect(calculatorKeyForKeyboardEvent('Enter', interactive, calculator)).toBeUndefined();
+    expect(calculatorKeyForKeyboardEvent('Enter', calculator, interactive)).toBeUndefined();
+    expect(calculatorKeyForKeyboardEvent(' ', interactive, calculator)).toBeUndefined();
+    expect(calculatorKeyForKeyboardEvent('Enter', editable, calculator)).toBeUndefined();
+    expect(calculatorKeyForKeyboardEvent('7', interactive, interactive)).toBe('7');
+    expect(calculatorKeyForKeyboardEvent('+', interactive, interactive)).toBe('add');
+    expect(calculatorKeyForKeyboardEvent('7', editable, editable)).toBeUndefined();
   });
 });
 

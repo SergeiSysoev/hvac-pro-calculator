@@ -216,7 +216,7 @@ describe('published field-calculator guide examples', () => {
 
   it('matches velocity pressure constants', () => {
     expect(velocityPressureResults(0.049).map((result) => result.label))
-      .toEqual(['FPM', 'VP', 'MPS', 'KPA', 'ENTRY']);
+      .toEqual(['FPM', 'VP', 'MPS', 'PA', 'ENTRY']);
     expect(velocityPressureResults(0.049)[0].value.amount).toBeCloseTo(886.5445, 4);
     expect(velocityPressureResults(0.123)[0].value.amount).toBeCloseTo(1404.608, 3);
     const from500 = velocityPressureResults(500);

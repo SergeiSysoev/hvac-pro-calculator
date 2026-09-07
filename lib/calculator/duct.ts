@@ -534,3 +534,8 @@ export function displayToImperialValue(
   if (field === 'velocityFpm') return value / DUCT_CONVERSIONS.fpmToMetersPerSecond;
   return value / DUCT_CONVERSIONS.inchToMillimeter;
 }
+
+/** Preserve manual values through repeated Imperial ⇄ SI input toggles. */
+export function formatDuctConvertedInput(value: number): string {
+  return Number(value.toPrecision(12)).toString();
+}

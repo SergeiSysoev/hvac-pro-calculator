@@ -4,7 +4,8 @@ import {
   useRef,
 } from 'react';
 import type { CalculatorState, KeyId } from '@/lib/calculator/engine';
-import LcdValue from '@/components/calculator/LcdValue';
+import CalculatorDisplay from '@/components/calculator/CalculatorDisplay';
+import { accessibleKeyLabel } from '@/components/calculator/CalculatorKeypad';
 
 type PhysicalKey = {
   id: KeyId;
@@ -67,22 +68,11 @@ export const PHYSICAL_KEY_ROWS: PhysicalKey[][] = [
   [
     { id: 'pi', primary: 'π', secondary: 'ArcK', tone: 'dark' },
     { id: '0', primary: '0', secondary: 'VP ↔ FPM', tone: 'light' },
-    { id: 'decimal', primary: '•', secondary: 'dms ↔ deg', tone: 'light' },
+    { id: 'decimal', primary: '.', secondary: 'dms ↔ deg', tone: 'light' },
     { id: 'equals', primary: '=', secondary: 'Prefs', tone: 'dark' },
     { id: 'add', primary: '+', secondary: '%', tone: 'dark' },
   ],
 ];
-
-function hasMemory(state: CalculatorState): boolean {
-  return Boolean(state.memory.cumulative || state.memory.m1 || state.memory.m2 || state.memory.m3);
-}
-
-export function lcdValueSizeClass(valueText: string): string {
-  const glyphCount = Array.from(valueText).length;
-  if (glyphCount >= 12) return 'lcd-value-dense';
-  if (glyphCount >= 10) return 'lcd-value-compact';
-  return '';
-}
 
 function consumeSuppressedPointerClick(
   event: ReactMouseEvent<HTMLButtonElement>,
@@ -123,16 +113,6 @@ export default function PhysicalCalculator({
   const suppressedOnPointers = useRef(new Set<number>());
   const finishedOnPointers = useRef(new Set<number>());
   const resetTriggered = useRef(false);
-  const modifier = state.modifier === 'convert'
-    ? 'CONV'
-    : state.modifier === 'recall-convert'
-      ? 'RCL CONV'
-    : state.modifier === 'recall'
-      ? 'RCL'
-      : '';
-  const lcdValueText = state.powered ? state.display.valueText : '';
-  const lcdValueClass = lcdValueSizeClass(lcdValueText);
-
   const startResetHold = (event: ReactPointerEvent<HTMLButtonElement>) => {
     if (state.powered || event.button !== 0 || heldResetPointers.current.has(event.pointerId)) return;
     event.preventDefault();
@@ -195,31 +175,10 @@ export default function PhysicalCalculator({
       <div className="calculator-face">
         <div className="brand-strip">
           <strong>PROFESSIONAL HVAC CALCULATOR</strong>
-          <span>SHEET METAL • CONSTRUCTION MATH</span>
+          <span>Sheet metal · Construction math</span>
         </div>
 
-        <div
-          className={`physical-lcd ${state.display.label === 'ERROR' ? 'lcd-error' : ''}`}
-          role={active ? 'status' : undefined}
-          aria-live={active ? 'polite' : 'off'}
-          aria-label={`${state.display.label} ${state.display.plainText} ${state.display.note ?? ''}`.trim()}
-        >
-          <div className="lcd-annunciators" aria-hidden="true">
-            <span>
-              {state.parenthesisDepth ? `(${state.parenthesisDepth}` : ''}
-              {state.display.note ? <b className="lcd-warning" title={state.display.note}>▲</b> : null}
-            </span>
-            <span>{hasMemory(state) ? 'M' : ''}</span>
-            <span>{modifier}</span>
-          </div>
-          <span className="lcd-mode">{state.powered ? state.display.label : ''}</span>
-          <LcdValue
-            className={`lcd-value ${lcdValueClass}`.trim()}
-            text={lcdValueText}
-            valueLength={Array.from(lcdValueText).length}
-          />
-          <span className="lcd-units">{state.powered ? state.display.unitText : ''}</span>
-        </div>
+        <CalculatorDisplay active={active} state={state} variant="physical" />
 
         <div className="power-row">
           <span className="reset-label">RESET</span>
@@ -261,7 +220,13 @@ export default function PhysicalCalculator({
                 <button
                   type="button"
                   className={`physical-key physical-key-${key.tone ?? 'light'} ${latched ? 'key-latched' : ''}`}
-                  aria-label={`${key.primary}${key.detail ? ` ${key.detail}` : ''}${key.secondary ? `; Conv function ${key.secondary}` : ''}`}
+                  aria-label={accessibleKeyLabel({
+                    id: key.id,
+                    label: key.primary,
+                    key: key.id,
+                    detail: key.detail,
+                    secondary: key.secondary,
+                  })}
                   aria-pressed={key.id === 'conv' ? latched : undefined}
                   data-key={key.id}
                   style={key.id === 'multiply' && !state.powered ? { touchAction: 'none' } : undefined}
@@ -289,8 +254,6 @@ export default function PhysicalCalculator({
             );
           })}
         </div>
-
-        <div className="maker-mark">PROFESSIONAL FIELD TOOLS</div>
       </div>
     </div>
   );

@@ -12,9 +12,13 @@ Live site: [https://sergeisysoev.github.io/hvac-pro-calculator/](https://sergeis
 
 Swipe left or right, or use the three dots at the bottom, to change screens. Preferences, stored memories and duct entries remain on the device. The app supports offline use after the first successful load.
 
+The HVAC and Trade screens share a modern written-expression display. Entered dimensions stay visible as `8′ 2 3/8″`, arithmetic remains on screen through `=`, and conversions are shown explicitly as `source → result`. When a rounded intermediate screen value is reused while the engine retains guard digits, the operand is marked with `≈` so the written equation stays honest.
+
 ## Engineering basis
 
-The HVAC/Trade engine is checked against the published Model 4090 key definitions, examples, error codes, preference rules and reset workflow in User's Guide revision UG4090E-E (January 2025). Regression tests reproduce documented keystroke sequences for dimensional math, D:M:S, trigonometry, right triangles, Law of Cosines, offsets, fan laws, velocity pressure, circles/arcs, columns/cones, roof geometry, stairs, memory and preferences.
+The HVAC/Trade engine is checked against the published Model 4090 key definitions, examples, error conditions, preference rules and reset workflow in User's Guide revision UG4090E-E (January 2025). Regression tests reproduce documented keystroke sequences for dimensional math, D:M:S, trigonometry, right triangles, Law of Cosines, offsets, fan laws, velocity pressure, circles/arcs, columns/cones, roof geometry, stairs, memory and preferences.
+
+The guide's metric velocity-pressure example numerically produces pascals but labels the result `KPA`. This implementation preserves the documented numeric calculation and corrects that result label to `PA`, preventing a 1,000× unit interpretation error.
 
 The duct screen is an independent implementation of the ASHRAE equal-friction method. It uses Darcy-Weisbach pressure loss, the Colebrook friction factor, standard-air assumptions and the ASHRAE/Huebscher equivalent rectangular relationship. The six possible pairs of duct inputs are covered by automated tests.
 
@@ -35,6 +39,7 @@ Open `http://localhost:3000`.
 npm test
 npm run lint
 npx tsc --noEmit
+npm run build:pages
 npm run build
 ```
 
