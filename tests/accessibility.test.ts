@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { accessibleDisplayIndicators } from '@/components/calculator/CalculatorDisplay';
+import CalculatorDisplay from '@/components/calculator/CalculatorDisplay';
 import { accessibleKeyLabel } from '@/components/calculator/CalculatorKeypad';
 import { calculatorExpressionView } from '@/lib/calculator/presentation';
-import { calculatorReducer, initialCalculatorState } from '@/lib/calculator/engine';
+import { type KeyId, calculatorReducer, initialCalculatorState } from '@/lib/calculator/engine';
 
 describe('calculator accessibility text', () => {
   it('names symbolic editing keys by purpose', () => {
@@ -52,5 +55,24 @@ describe('calculator accessibility text', () => {
     expect(view.guidanceText).toBe(
       'Tap On/C to clear the previous error; all other keys are locked.',
     );
+  });
+
+  it('describes the diagram outside the decorative SVG and keeps one live region', () => {
+    const keys: KeyId[] = ['8', 'feet', 'run', '6', 'feet', 'rise', 'diag'];
+    const triangle = keys.reduce(
+      (state, key) => calculatorReducer(state, { type: 'press', key }),
+      initialCalculatorState(),
+    );
+    const markup = renderToStaticMarkup(createElement(CalculatorDisplay, {
+      active: true,
+      state: triangle,
+      variant: 'physical',
+    }));
+
+    expect(markup).toContain('aria-describedby="physical-calculator-guidance-description physical-calculator-diagram-description"');
+    expect(markup).toContain('id="physical-calculator-diagram-description"');
+    expect(markup).toContain('Right triangle · Run, Rise, Diagonal and Pitch');
+    expect(markup.match(/role="status"/g)).toHaveLength(1);
+    expect(markup).toContain('data-diagram-kind="right-triangle" aria-hidden="true"');
   });
 });

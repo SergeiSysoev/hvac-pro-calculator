@@ -285,6 +285,10 @@ describe('duct unit and shape helpers', () => {
     expect(rectangularEquivalents(120, 10000, 6)).toEqual([]);
   });
 
+  it('withholds the turbulent rectangular-equivalent surrogate at low Reynolds numbers', () => {
+    expect(rectangularEquivalents(5.8, 0.1, 6)).toEqual([]);
+  });
+
   it('keeps the two most recently edited input fields', () => {
     const first = promoteDuctInput(['airflowCfm', 'frictionRate'], 'airflowCfm');
     expect(first).toEqual(['frictionRate', 'airflowCfm']);

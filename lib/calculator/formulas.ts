@@ -481,6 +481,10 @@ export function stairResults(
   const denominator = preferences.fractionDenominator;
   const roundedRiser = Math.round(actualRiser * denominator) / denominator;
   const roundedTread = Math.round(actualTread * denominator) / denominator;
+  // All downstream dimensions use the selected fractional construction grid.
+  // A positive but sub-resolution setting can round to zero; reject it before
+  // OPEN/INCL calculations can create Infinity/NaN and reach the UI renderer.
+  if (roundedRiser <= 0 || roundedTread <= 0) throw new CalcError('DIM Error');
   const riserOver = roundedRiser * risers - rise;
   const treadOver = roundedTread * treads - run;
   const opening = (preferences.headroom + preferences.floorThickness) * roundedTread / roundedRiser;

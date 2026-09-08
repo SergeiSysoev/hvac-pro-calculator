@@ -27,6 +27,50 @@ export interface CalculatorExpressionView {
   liveText: string;
   ariaText: string;
   entryActive: boolean;
+  diagram?: CalculatorDiagramView;
+}
+
+export type CalculatorDiagramKind =
+  | 'right-triangle'
+  | 'circle'
+  | 'segment'
+  | 'offset'
+  | 'law-cosines'
+  | 'roof'
+  | 'stairs'
+  | 'solids'
+  | 'fan-law';
+
+export type CalculatorDiagramStatus = 'entered' | 'expected' | 'calculated';
+
+export interface CalculatorDiagramMetric {
+  id: string;
+  symbol: string;
+  label: string;
+  value?: string;
+  placeholder: string;
+  status: CalculatorDiagramStatus;
+  active: boolean;
+}
+
+export interface CalculatorDiagramView {
+  kind: CalculatorDiagramKind;
+  variant?: string;
+  title: string;
+  metrics: CalculatorDiagramMetric[];
+  geometry?: {
+    radius?: number;
+    chord?: number;
+    rise?: number;
+    theta?: number;
+    onCenter?: number;
+    memberIndex?: number;
+    memberCount?: number;
+    memberProgress?: number;
+    memberSide?: 'regular' | 'irregular';
+  };
+  pendingEntry: boolean;
+  ariaText: string;
 }
 
 interface SemanticResult {
@@ -931,7 +975,9 @@ function appendSemanticSuffix(
   const kind = value?.semanticKind;
   const suffix = semanticValueSuffix(kind);
   if (!suffix) return text;
-  const normalized = text.replace(/\.$/, '');
+  // Each suffix spells the notation out, so the percent sign already carried by
+  // the formatted value is dropped rather than repeated.
+  const normalized = text.replace(/\.$/, '').replace(/%$/, '');
   return suffix === '% grade' ? `${normalized}% grade` : `${normalized} ${suffix}`;
 }
 
@@ -948,7 +994,14 @@ function triangleGuidance(state: CalculatorState): string | undefined {
 
   const segmentChordValue = state.circle.chord ?? state.triangle.x;
   const segmentRiseValue = state.circle.rise ?? state.triangle.y;
-  if (state.segmentPairReady && (
+  // Run/Rise are shared by the triangle and segment workflows. A fresh pair
+  // alone is still presented as a right triangle; it becomes segment-focused
+  // when a radius is already stored or after the user invokes Seg Radius.
+  // This keeps the written guidance aligned with calculatorDiagramView().
+  const activeSegmentPair = Boolean(
+    state.segmentPairReady && state.circle.radius !== undefined,
+  );
+  if (activeSegmentPair && (
     segmentChordValue === undefined
     || segmentRiseValue === undefined
     || !Number.isFinite(segmentChordValue)
@@ -958,7 +1011,7 @@ function triangleGuidance(state: CalculatorState): string | undefined {
   )) {
     return 'Chord and rise must both be positive before calculating the segment radius.';
   }
-  if (state.segmentPairReady) {
+  if (activeSegmentPair) {
     return 'Chord and rise are ready. Tap Conv + Pitch to calculate the segment radius.';
   }
   if (
@@ -1055,6 +1108,9 @@ function triangleGuidance(state: CalculatorState): string | undefined {
       .filter((candidate) => candidate !== key)
       .map((candidate) => names[candidate]);
     return `${stored} is stored. Enter ${choices.slice(0, -1).join(', ')}, or ${choices.at(-1)}.`;
+  }
+  if (state.segmentPairReady && entered.has('x') && entered.has('y')) {
+    return 'Run and Rise are ready. Tap Diagonal or Pitch to solve the triangle, or Conv + Pitch for the segment radius.';
   }
   return 'Triangle is ready. Solve a side, or use Pitch, Hip/V, Jack, or Stair.';
 }
@@ -1201,6 +1257,13 @@ function displayGuidance(
   // Otherwise a suggested geometry key can consume the operand instead of the
   // registers the hint describes (for example recalled FPM as a segment radius).
   if (entryActive) {
+    // A recalled irregular pitch is a named roof value, not an anonymous entry.
+    if (state.display.label.trim() === 'IPCH STORED') {
+      return {
+        text: 'Stored irregular pitch is on screen. Enter Run and tap Hip/V, or type a new pitch and store it with Conv + Hip/V.',
+        tone: 'tip',
+      };
+    }
     if (
       state.inputKind === 'dms'
       || state.inputKind === 'decimal-degree'
@@ -1225,6 +1288,39 @@ function displayGuidance(
         ? 'warning'
         : 'tip'
     );
+    const activeDiagram = calculatorDiagramView(state);
+    if (
+      state.display.label.trim() === 'A STORED'
+      && state.diagramFocus === 'offset'
+      && !hasValidStagedOffset(state)
+    ) {
+      return {
+        text: 'Offset is not ready: Run and Rise must be positive, and End A must match their dimension mode and leave a non-negative throat radius.',
+        tone: 'warning',
+      };
+    }
+    if (activeDiagram?.kind === 'offset' && state.display.label.trim() === 'A STORED') {
+      return {
+        text: 'Run, Rise, and End A are ready. Tap Conv + ( to calculate the Offset.',
+        tone: 'tip',
+      };
+    }
+    // The irregular-roof drawing and the written hint describe the same step:
+    // without this the stored regular Pitch kept offering the Diagonal, which
+    // is not part of the irregular hip workflow that is on screen.
+    if (activeDiagram?.variant === 'ir-hip'
+      && activeDiagram.metrics.some((item) => item.id === 'irregular-pitch')) {
+      return {
+        text: state.permanentPitchSlope === undefined
+          ? 'Irregular pitch is stored for the second roof plane. Store the regular Pitch, then enter Run and tap Hip/V.'
+          : 'Both roof pitches are stored. Enter Run, then tap Hip/V for the irregular hip and valley.',
+        tone: 'tip',
+      };
+    }
+    if (activeDiagram?.kind === 'law-cosines' || activeDiagram?.kind === 'fan-law') {
+      const registers = registerGuidance(state);
+      if (registers) return { text: registers, tone: guidanceTone(registers) };
+    }
     const triangle = triangleGuidance(state);
     if (triangle) {
       return {
@@ -1245,6 +1341,1178 @@ function displayGuidance(
     text: 'Enter a value. Length tools treat a bare number as inches.',
     tone: 'tip',
   };
+}
+
+function hasPendingDiagramEntry(state: CalculatorState): boolean {
+  return Boolean(
+    state.entry
+    || state.fractionNumerator !== undefined
+    || state.composedInches !== undefined
+    || state.imperialEntryText
+    || state.exponentBase !== undefined,
+  );
+}
+
+function diagramValue(value: CalcValue | undefined, state: CalculatorState): string | undefined {
+  return value
+    ? readableMeasurement(formatValue(value, state.preferences).plainText)
+    : undefined;
+}
+
+function diagramLinearValue(
+  state: CalculatorState,
+  amount: number | undefined,
+  unit: CalcValue['unit'] | undefined,
+  unitless = false,
+  fractionDenominator?: CalcValue['fractionDenominator'],
+  inputValue?: CalcValue,
+): string | undefined {
+  if (amount === undefined || !Number.isFinite(amount)) return undefined;
+  if (unitless) {
+    return diagramValue({ amount, power: 0, unit: 'auto', system: 'neutral' }, state);
+  }
+  const normalizedInputValue = inputValue?.power === 0 && !inputValue.angle && !inputValue.semanticKind
+    ? {
+        ...inputValue,
+        power: 1,
+        unit: inputValue.fractionDenominator ? 'in' as const : 'decimal-in' as const,
+        system: 'imperial' as const,
+      }
+    : inputValue;
+  const normalizedSource = normalizedInputValue?.source;
+  const decimalSourceUnit = normalizedInputValue?.power === 1
+    && normalizedInputValue.fractionDenominator === undefined
+    && /\d\.\d/.test(normalizedSource?.entryText ?? '')
+      ? normalizedSource?.unit
+      : undefined;
+  const resolvedUnit = decimalSourceUnit === 'in'
+    ? 'decimal-in'
+    : decimalSourceUnit === 'ft'
+      ? 'decimal-ft'
+      : inputValue?.power === 0 && !inputValue.angle && !inputValue.semanticKind
+        ? inputValue.fractionDenominator ? 'in' : 'decimal-in'
+      : normalizedInputValue?.power === 1
+        && !normalizedInputValue.angle
+        && (
+          normalizedInputValue.fractionDenominator !== undefined
+          || normalizedInputValue.unit === 'ft-decimal-in'
+          || normalizedInputValue.unit === 'm'
+          || normalizedInputValue.unit === 'mm'
+        )
+        ? normalizedInputValue.unit === 'decimal-in'
+          ? 'in'
+          : normalizedInputValue.unit === 'decimal-ft'
+            ? 'ft-in'
+            : normalizedInputValue.unit
+        : unit ?? 'ft-in';
+  const value: CalcValue = {
+    amount,
+    power: 1,
+    unit: resolvedUnit,
+    system: resolvedUnit === 'm' || resolvedUnit === 'mm' ? 'metric' : 'imperial',
+    fractionDenominator: normalizedInputValue?.fractionDenominator ?? fractionDenominator,
+  };
+  const formatted = diagramValue(value, state);
+  if (
+    amount !== 0
+    && (resolvedUnit === 'in' || resolvedUnit === 'ft-in')
+    && (formatted === '0″' || formatted === '0′ 0″')
+  ) {
+    return readableMeasurement(formatValue({ ...value, unit: 'decimal-in' }, state.preferences).plainText);
+  }
+  return formatted;
+}
+
+function diagramAngleValue(state: CalculatorState, amount: number | undefined): string | undefined {
+  if (amount === undefined || !Number.isFinite(amount)) return undefined;
+  return diagramValue({ amount, power: 0, angle: true, unit: 'auto', system: 'neutral' }, state);
+}
+
+function diagramMetric(
+  id: string,
+  symbol: string,
+  label: string,
+  value: string | undefined,
+  entered: boolean,
+  active: boolean,
+  placeholder = 'enter option',
+): CalculatorDiagramMetric {
+  return {
+    id,
+    symbol,
+    label,
+    value,
+    placeholder,
+    status: value === undefined ? 'expected' : entered ? 'entered' : 'calculated',
+    active,
+  };
+}
+
+function finishDiagram(
+  state: CalculatorState,
+  diagram: Omit<CalculatorDiagramView, 'pendingEntry' | 'ariaText'>,
+): CalculatorDiagramView {
+  const pendingEntry = hasPendingDiagramEntry(state);
+  const sequence = state.sequence;
+  const currentSequenceResult = sequence
+    && sequence.index >= 0
+    && sequenceIsDisplayed(state)
+      ? sequence.results[sequence.index]
+      : undefined;
+  const currentSemantic = currentSequenceResult && sequence
+    ? sequenceResult(
+        sequence.id,
+        currentSequenceResult.label,
+        currentSequenceResult.value,
+        sequence,
+        sequence.index,
+      )
+    : undefined;
+  const currentIsEntered = Boolean(
+    currentSequenceResult
+    && sequence
+    && (
+      sequence.inputIndex === sequence.index
+      || /STORED$/.test(currentSequenceResult.label)
+      || (sequence.id === 'lawcos' && /^[abc]$/.test(currentSequenceResult.label))
+      || (sequence.id === 'offset' && currentSequenceResult.label === 'A STORED')
+      || (sequence.id === 'arc' && currentSequenceResult.label === 'OC' && state.onCenterStored)
+    )
+  );
+  const metrics = diagram.metrics.map((metric) => {
+    if (!metric.active || !currentSequenceResult || !currentSemantic) return metric;
+    // Pitch is a representation cycle (inches, angle, grade, slope). Only the
+    // exact representation supplied by the operator is entered; the remaining
+    // formats are conversions even though they share the same theta drawing.
+    const matchesEnteredMetric = sequence?.id !== 'pitch' && metric.status === 'entered' && (
+      metric.label === currentSemantic.label
+      || metric.label.startsWith(`${currentSemantic.label} `)
+      || currentSemantic.label.startsWith(`${metric.label} `)
+    );
+    return {
+      ...metric,
+      symbol: currentSequenceResult.label.replace(/(?: \([^)]*\))? STORED$/, ''),
+      label: currentSemantic.label,
+      value: diagramValue(currentSequenceResult.value, state),
+      // Selecting an item in a result cycle must not erase its provenance.
+      // A Run/Chord or register supplied by the user remains "entered" even
+      // when that same element is the currently highlighted cycle result.
+      status: currentIsEntered || matchesEnteredMetric
+        ? 'entered' as const
+        : 'calculated' as const,
+    };
+  });
+  const statusNames: Record<CalculatorDiagramStatus, string> = {
+    entered: 'entered or stored',
+    expected: 'expected next',
+    calculated: 'calculated',
+  };
+  const metricText = metrics.map((metric) => (
+    `${metric.label}: ${metric.value ?? metric.placeholder}; ${statusNames[metric.status]}${metric.active ? '; current result' : ''}`
+  ));
+  return {
+    ...diagram,
+    metrics,
+    pendingEntry,
+    ariaText: [
+      diagram.title,
+      pendingEntry
+        ? 'The number currently being typed is not assigned until a geometry key is pressed.'
+        : undefined,
+      ...metricText,
+    ].filter(Boolean).join('. '),
+  };
+}
+
+function sequenceResultValue(
+  state: CalculatorState,
+  matcher: string | RegExp,
+): CalcValue | undefined {
+  return state.sequence?.results.find((result) => (
+    typeof matcher === 'string' ? result.label === matcher : matcher.test(result.label)
+  ))?.value;
+}
+
+function rightTriangleDiagram(
+  state: CalculatorState,
+  variant = 'triangle',
+  force = false,
+): CalculatorDiagramView | undefined {
+  const entered = new Set(
+    state.triangleInputs.filter((key) => state.triangle[key] !== undefined),
+  );
+  const usesStoredPitch = entered.size < 2
+    && !entered.has('theta')
+    && state.permanentPitchSlope !== undefined
+    && Number.isFinite(state.permanentPitchSlope);
+  const theta = state.triangle.theta ?? (usesStoredPitch
+    ? Math.atan(state.permanentPitchSlope!) * 180 / Math.PI
+    : undefined);
+  if (!force && !entered.size && theta === undefined) return undefined;
+  const label = state.display.label.trim();
+  const active = {
+    x: label === 'X',
+    y: label === 'Y',
+    r: label === 'R',
+    theta: ['PTCH', 'PTCH STORED', '∠θ', '%GRD', 'SLP', 'PLMB', 'LEVL'].includes(label),
+  };
+  const unitless = state.triangleUnitless === true;
+  const fallbackUnit = state.resultUnit;
+  return finishDiagram(state, {
+    kind: 'right-triangle',
+    variant,
+    title: 'Right triangle · Run, Rise, Diagonal and Pitch',
+    metrics: [
+      diagramMetric(
+        'x', 'x', 'Run',
+        diagramLinearValue(
+          state,
+          state.triangle.x,
+          state.triangleUnits.x ?? fallbackUnit,
+          unitless,
+          state.triangleFractionDenominators.x,
+          state.triangleInputValues.x,
+        ),
+        entered.has('x'), active.x,
+      ),
+      diagramMetric(
+        'y', 'y', 'Rise',
+        diagramLinearValue(
+          state,
+          state.triangle.y,
+          state.triangleUnits.y ?? fallbackUnit,
+          unitless,
+          state.triangleFractionDenominators.y,
+          state.triangleInputValues.y,
+        ),
+        entered.has('y'), active.y,
+      ),
+      diagramMetric(
+        'r', 'r', 'Diagonal',
+        diagramLinearValue(
+          state,
+          state.triangle.r,
+          state.triangleUnits.r ?? fallbackUnit,
+          unitless,
+          state.triangleFractionDenominators.r,
+          state.triangleInputValues.r,
+        ),
+        entered.has('r'), active.r,
+      ),
+      diagramMetric(
+        'theta', label === 'PTCH STORED' ? 'PTCH' : 'θ',
+        label === 'PTCH STORED' ? 'Stored pitch' : 'Pitch angle',
+        label === 'PTCH STORED'
+          ? diagramValue(state.current, state)
+          : diagramAngleValue(state, theta),
+        entered.has('theta') || usesStoredPitch || label === 'PTCH STORED', active.theta,
+      ),
+    ],
+  });
+}
+
+function circleDiagram(state: CalculatorState): CalculatorDiagramView {
+  const label = state.display.label.trim();
+  const unit = state.circleRadiusUnit ?? state.circleResultUnit ?? state.resultUnit;
+  return finishDiagram(state, {
+    kind: 'circle',
+    title: 'Circle · Diameter, Radius, Circumference and Area',
+    metrics: [
+      diagramMetric(
+        'diameter', 'Ø', 'Diameter',
+        diagramValue(sequenceResultValue(state, 'DIA'), state)
+          ?? diagramLinearValue(
+            state,
+            state.circle.diameter,
+            unit,
+            false,
+            state.circleInput === 'diameter' ? state.circleInputFractionDenominator : undefined,
+            state.circleInput === 'diameter' ? state.circleInputValue : undefined,
+          ),
+        state.circleInput === 'diameter', label === 'DIA', 'enter diameter',
+      ),
+      diagramMetric(
+        'radius', 'r', 'Radius',
+        diagramLinearValue(
+          state,
+          state.circle.radius,
+          unit,
+          false,
+          state.circleInput === 'radius' ? state.circleInputFractionDenominator : undefined,
+          state.circleInput === 'radius' ? state.circleInputValue : undefined,
+        ),
+        state.circleInput === 'radius', label === 'RAD', 'from diameter',
+      ),
+      diagramMetric(
+        'circumference', 'C', 'Circumference',
+        diagramValue(sequenceResultValue(state, 'CIRC'), state),
+        false, label === 'CIRC', 'after solve',
+      ),
+      diagramMetric(
+        'area', 'A', 'Circle area',
+        diagramValue(sequenceResultValue(state, 'AREA'), state),
+        false, label === 'AREA', 'after solve',
+      ),
+    ],
+  });
+}
+
+function segmentDiagram(state: CalculatorState, variant = 'segment'): CalculatorDiagramView {
+  const label = state.display.label.trim();
+  const unit = state.circleRadiusUnit ?? state.circleResultUnit ?? state.resultUnit;
+  const radius = state.circle.radius
+    ?? (state.circle.diameter === undefined ? undefined : state.circle.diameter / 2);
+  const chordEntered = state.segmentInputs.includes('x');
+  const riseEntered = state.segmentInputs.includes('y');
+  const hasFreshSegmentInput = Boolean(state.segmentPairReady || chordEntered || riseEntered);
+  const activeArcSequence = state.sequence?.id === 'arc' && sequenceIsDisplayed(state);
+  const retainedArcIsCurrent = activeArcSequence || !hasFreshSegmentInput;
+  let theta = retainedArcIsCurrent ? state.circle.arcDegrees : undefined;
+  if (
+    theta === undefined
+    && retainedArcIsCurrent
+    && radius
+    && state.circle.arcLength !== undefined
+  ) {
+    theta = state.circle.arcLength / radius * 180 / Math.PI;
+  }
+  const explicitArc = Boolean(state.arcInput && activeArcSequence);
+  const storedChord = state.circle.chord ?? state.triangle.x;
+  const storedRise = state.circle.rise ?? state.triangle.y;
+  if (theta === undefined && radius) {
+    const thetaFromRise = () => {
+      if (storedRise === undefined) return undefined;
+      const cosine = (radius - storedRise) / radius;
+      return cosine >= -1 && cosine <= 1
+        ? 2 * Math.acos(cosine) * 180 / Math.PI
+        : undefined;
+    };
+    const thetaFromChord = () => {
+      if (storedChord === undefined) return undefined;
+      const sine = storedChord / (2 * radius);
+      return sine >= -1 && sine <= 1
+        ? 2 * Math.asin(sine) * 180 / Math.PI
+        : undefined;
+    };
+    const latestSegmentInput = state.segmentInputs.at(-1);
+    theta = state.segmentPairReady && chordEntered && riseEntered
+      ? thetaFromRise()
+      : latestSegmentInput === 'x'
+        ? thetaFromChord()
+        : latestSegmentInput === 'y'
+          ? thetaFromRise()
+          : thetaFromRise() ?? thetaFromChord();
+  }
+  const derivedChord = radius && theta !== undefined
+    ? 2 * radius * Math.sin(theta * Math.PI / 360)
+    : undefined;
+  const derivedRise = radius && theta !== undefined
+    ? radius * (1 - Math.cos(theta * Math.PI / 360))
+    : undefined;
+  const chord = explicitArc ? derivedChord : storedChord ?? derivedChord;
+  const rise = explicitArc ? derivedRise : storedRise ?? derivedRise;
+  const chordResult = sequenceResultValue(state, 'CORD');
+  const riseResult = sequenceResultValue(state, 'RISE');
+  const enteredArcAngleIsDisplayed = state.arcInput === 'angle'
+    && activeArcSequence
+    && state.sequence?.index === -1
+    && label === 'ARC';
+  const arcValue = retainedArcIsCurrent
+    ? state.arcInput === 'length'
+      ? diagramLinearValue(
+          state,
+          state.circle.arcLength,
+          state.circleResultUnit ?? unit,
+          false,
+          state.arcInputFractionDenominator,
+          state.arcInputValue,
+        )
+      : enteredArcAngleIsDisplayed
+        ? readableMeasurement(state.display.plainText)
+        : diagramAngleValue(state, theta)
+    : undefined;
+  const arcIsLength = retainedArcIsCurrent && state.arcInput === 'length';
+  const chordShown = explicitArc || state.sequence?.id === 'arc' || chordEntered || label === 'CORD';
+  const riseShown = explicitArc || state.sequence?.id === 'arc' || riseEntered || label === 'RISE';
+  const radiusDerivedFromPair = state.circleInput === undefined && chordEntered && riseEntered;
+  const arcEntered = state.sequence?.inputIndex === -1;
+  const wallMemberMatch = label.match(/^AW(\d+)$/);
+  const wallMemberCount = state.sequence?.id === 'arc'
+    ? state.sequence.results.filter((result) => /^AW\d+$/.test(result.label)).length
+    : 0;
+  return finishDiagram(state, {
+    kind: 'segment',
+    variant,
+    title: variant === 'arc'
+      ? 'Circular arc · Radius, Chord, Rise and Arc'
+      : 'Circular segment · Radius, Chord and Rise',
+    geometry: {
+      radius,
+      chord,
+      rise,
+      theta,
+      onCenter: state.preferences.onCenter,
+      memberIndex: wallMemberMatch ? Number(wallMemberMatch[1]) : undefined,
+      memberCount: wallMemberCount || undefined,
+    },
+    metrics: [
+      diagramMetric(
+        'radius', 'r', 'Radius',
+        diagramLinearValue(
+          state,
+          state.circle.radius,
+          unit,
+          false,
+          state.circleInput === 'radius' ? state.circleInputFractionDenominator : undefined,
+          state.circleInput === 'radius' ? state.circleInputValue : undefined,
+        ),
+        state.circleInput === 'radius' && !radiusDerivedFromPair,
+        label === 'RAD', 'enter radius',
+      ),
+      diagramMetric(
+        'chord', 'c', 'Chord / Run',
+        (explicitArc ? diagramValue(chordResult, state) : undefined)
+          ?? (chordShown
+            ? diagramLinearValue(
+                state,
+                chord,
+                state.triangleUnits.x ?? state.circleResultUnit ?? unit,
+                false,
+                chordEntered ? state.triangleFractionDenominators.x : undefined,
+                chordEntered ? state.triangleInputValues.x : undefined,
+              )
+            : undefined)
+          ?? diagramValue(chordResult, state),
+        chordEntered, label === 'CORD' || label === 'X', 'enter chord',
+      ),
+      diagramMetric(
+        'rise', 'h', 'Segment rise',
+        (explicitArc ? diagramValue(riseResult, state) : undefined)
+          ?? (riseShown
+            ? diagramLinearValue(
+                state,
+                rise,
+                state.triangleUnits.y ?? state.circleHeightUnit ?? unit,
+                false,
+                riseEntered ? state.triangleFractionDenominators.y : undefined,
+                riseEntered ? state.triangleInputValues.y : undefined,
+              )
+            : undefined)
+          ?? diagramValue(riseResult, state),
+        riseEntered, label === 'RISE' || label === 'Y', 'enter rise',
+      ),
+      diagramMetric(
+        'arc', arcIsLength ? 's' : 'θ', arcIsLength ? 'Arc length' : 'Arc angle', arcValue,
+        arcEntered, label === 'ARC', 'after solve',
+      ),
+      diagramMetric(
+        'segment-area', 'SEG', 'Circular segment area',
+        diagramValue(sequenceResultValue(state, 'SEG'), state),
+        false, label === 'SEG', 'after solve',
+      ),
+      diagramMetric(
+        'sector-area', 'PIE', 'Circular sector area',
+        diagramValue(sequenceResultValue(state, 'PIE'), state),
+        false, label === 'PIE', 'after solve',
+      ),
+      diagramMetric(
+        'spacing', 'OC', 'Arched-wall spacing',
+        diagramLinearValue(
+          state,
+          sequenceResultValue(state, 'OC')?.amount,
+          'in',
+          false,
+          undefined,
+          state.linearPreferenceInputValues.onCenter,
+        ),
+        state.onCenterStored === true, label === 'OC', 'stored setting',
+      ),
+      diagramMetric(
+        'member', wallMemberMatch?.[0] ?? 'AW', 'Current arched-wall member',
+        wallMemberMatch ? diagramValue(state.current, state) : undefined,
+        false, Boolean(wallMemberMatch), 'cycle Arc',
+      ),
+    ],
+  });
+}
+
+function offsetDiagram(state: CalculatorState): CalculatorDiagramView {
+  const label = state.display.label.trim();
+  const unitless = state.triangleUnitless === true;
+  const unit = state.resultUnit;
+  const usesSequenceSnapshot = state.sequence?.id === 'offset' && sequenceIsDisplayed(state);
+  const radius = usesSequenceSnapshot ? sequenceResultValue(state, 'RAD') : undefined;
+  const wrapper = usesSequenceSnapshot ? sequenceResultValue(state, 'WL') : undefined;
+  const heel = usesSequenceSnapshot ? sequenceResultValue(state, 'HEEL') : undefined;
+  const throat = usesSequenceSnapshot ? sequenceResultValue(state, 'THRT') : undefined;
+  const theta = usesSequenceSnapshot ? sequenceResultValue(state, 'THET') : undefined;
+  const storedEndA = (usesSequenceSnapshot
+    ? sequenceResultValue(state, 'A STORED')
+    : undefined) ?? state.registers.a;
+  const displayedEndA = unitless
+    ? diagramValue(storedEndA, state)
+    : diagramLinearValue(
+        state,
+        storedEndA?.amount,
+        storedEndA?.power === 1 ? storedEndA.unit : 'in',
+        false,
+        storedEndA?.fractionDenominator,
+        storedEndA,
+      );
+  return finishDiagram(state, {
+    kind: 'offset',
+    title: 'Offset · Actual length, Offset and End A',
+    metrics: [
+      diagramMetric(
+        'x', 'x', 'Actual length',
+        diagramLinearValue(
+          state,
+          state.triangle.x,
+          state.triangleUnits.x ?? unit,
+          unitless,
+          state.triangleFractionDenominators.x,
+          state.triangleInputValues.x,
+        ),
+        state.triangleInputs.includes('x'), label === 'X', 'enter with Run',
+      ),
+      diagramMetric(
+        'y', 'y', 'Offset length',
+        diagramLinearValue(
+          state,
+          state.triangle.y,
+          state.triangleUnits.y ?? unit,
+          unitless,
+          state.triangleFractionDenominators.y,
+          state.triangleInputValues.y,
+        ),
+        state.triangleInputs.includes('y'), label === 'Y', 'enter with Rise',
+      ),
+      diagramMetric(
+        'a', 'A', 'End-A height', displayedEndA,
+        storedEndA !== undefined, label === 'A STORED', 'store with Conv + 4',
+      ),
+      diagramMetric(
+        'radius', 'R', 'Centerline radius', diagramValue(radius, state),
+        false, label === 'RAD', 'after solve',
+      ),
+      diagramMetric(
+        'wrapper', 'WL', 'Wrapper length', diagramValue(wrapper, state),
+        false, label === 'WL', 'after solve',
+      ),
+      diagramMetric(
+        'heel', 'HEEL', 'Heel radius', diagramValue(heel, state),
+        false, label === 'HEEL', 'after solve',
+      ),
+      diagramMetric(
+        'throat', 'THRT', 'Throat radius', diagramValue(throat, state),
+        false, label === 'THRT', 'after solve',
+      ),
+      diagramMetric(
+        'theta', 'θ', 'Offset angle', diagramValue(theta, state),
+        false, label === 'THET', 'after solve',
+      ),
+    ],
+  });
+}
+
+function usableGeometryRegister(value: CalcValue | undefined): value is CalcValue {
+  return Boolean(
+    value
+    && Number.isFinite(value.amount)
+    && value.amount > 0
+    && !value.angle
+    && !value.semanticKind
+    && (value.power === 0 || value.power === 1),
+  );
+}
+
+function displayedGeometryRegister(value: CalcValue | undefined, state: CalculatorState): string | undefined {
+  return diagramLinearValue(
+    state,
+    value?.amount,
+    value?.power === 1 ? value.unit : 'in',
+    false,
+    value?.fractionDenominator,
+    value,
+  );
+}
+
+function lawCosinesDiagram(state: CalculatorState, force = false): CalculatorDiagramView | undefined {
+  const usesSequenceSnapshot = state.sequence?.id === 'lawcos' && sequenceIsDisplayed(state);
+  const a = (usesSequenceSnapshot ? sequenceResultValue(state, 'a') : undefined) ?? state.registers.a;
+  const b = (usesSequenceSnapshot ? sequenceResultValue(state, 'b') : undefined) ?? state.registers.b;
+  const c = (usesSequenceSnapshot ? sequenceResultValue(state, 'c') : undefined) ?? state.registers.c;
+  const supplied = [a, b, c].filter(usableGeometryRegister);
+  if (!force && c === undefined) return undefined;
+  if ([a, b, c].some((value) => value !== undefined && !usableGeometryRegister(value))) {
+    return undefined;
+  }
+  if (
+    supplied.length === 3
+    && (a!.amount + b!.amount <= c!.amount
+      || a!.amount + c!.amount <= b!.amount
+      || b!.amount + c!.amount <= a!.amount)
+  ) return undefined;
+  const label = state.display.label.trim();
+  const storedSide = label.match(/^([ABC]) STORED$/)?.[1].toLowerCase();
+  const activeSide = label.length === 1 ? label : storedSide;
+  return finishDiagram(state, {
+    kind: 'law-cosines',
+    title: 'Law of Cosines · Sides and opposite angles',
+    metrics: [
+      diagramMetric('a', 'a', 'Side a', displayedGeometryRegister(a, state), Boolean(a), activeSide === 'a', 'store side a'),
+      diagramMetric('b', 'b', 'Side b', displayedGeometryRegister(b, state), Boolean(b), activeSide === 'b', 'store side b'),
+      diagramMetric('c', 'c', 'Side c', displayedGeometryRegister(c, state), Boolean(c), activeSide === 'c', 'store side c'),
+      diagramMetric(
+        'angle-a', 'A', 'Angle A', diagramValue(sequenceResultValue(state, '∠A'), state),
+        false, label === '∠A', 'after solve',
+      ),
+      diagramMetric(
+        'angle-b', 'B', 'Angle B', diagramValue(sequenceResultValue(state, '∠B'), state),
+        false, label === '∠B', 'after solve',
+      ),
+      diagramMetric(
+        'angle-c', 'C', 'Angle C', diagramValue(sequenceResultValue(state, '∠C'), state),
+        false, label === '∠C', 'after solve',
+      ),
+      diagramMetric(
+        'area', 'AREA', 'Triangle area', diagramValue(sequenceResultValue(state, 'AREA'), state),
+        false, label === 'AREA', 'after solve',
+      ),
+    ],
+  });
+}
+
+/**
+ * Irregular pitch defines the second roof plane, so it is drawn on the
+ * irregular hip roof rather than on a bare right triangle: the operator sees
+ * which of the two slopes the number they are entering belongs to, and which
+ * roof values are still expected.
+ */
+function irregularPitchDiagram(state: CalculatorState): CalculatorDiagramView {
+  const label = state.display.label.trim();
+  const showsIrregular = /^IPCH(?: STORED)?$/.test(label);
+  // irregularPitch() normalizes the screen to rise-per-12 while the stored entry
+  // keeps the typed form, so on the IPCH screen the drawing has to follow the
+  // screen. Off-screen it falls back to what the operator typed.
+  const irregular = showsIrregular && state.current
+    ? state.current
+    : state.irregularPitchInputValue;
+  return finishDiagram(state, {
+    kind: 'roof',
+    variant: 'ir-hip',
+    title: 'Irregular hip / valley \u00b7 Two roof planes with different pitches',
+    geometry: { memberSide: 'irregular' },
+    metrics: [
+      // The roof drawing always renders run/rise/hip, so they are named here
+      // with the same symbols every other roof view uses. Without them the
+      // canvas fell back to raw metric ids and printed "? run" / "? hip".
+      diagramMetric(
+        'run', 'x', 'Roof run',
+        diagramLinearValue(
+          state,
+          state.triangle.x,
+          state.triangleUnits.x ?? state.resultUnit,
+          state.triangleUnitless === true,
+          state.triangleFractionDenominators.x,
+          state.triangleInputValues.x,
+        ),
+        state.triangleInputs.includes('x'), false, 'enter run',
+      ),
+      diagramMetric(
+        'rise', 'y', 'Roof rise',
+        diagramLinearValue(
+          state,
+          state.triangle.y,
+          state.triangleUnits.y ?? state.resultUnit,
+          state.triangleUnitless === true,
+          state.triangleFractionDenominators.y,
+          state.triangleInputValues.y,
+        ),
+        state.triangleInputs.includes('y'), false, 'from pitch',
+      ),
+      diagramMetric(
+        'hip', 'H/V', 'Hip / valley length', undefined,
+        false, false, 'after Hip/V',
+      ),
+      diagramMetric(
+        'pitch', 'PTCH', 'Regular roof pitch',
+        diagramValue(state.permanentPitchInputValue, state),
+        state.permanentPitchSlope !== undefined, false, 'store a pitch',
+      ),
+      diagramMetric(
+        'irregular-pitch', 'IPCH', 'Irregular roof pitch',
+        diagramValue(irregular, state),
+        true, showsIrregular, 'enter irregular pitch',
+      ),
+    ],
+  });
+}
+
+function roofDiagram(state: CalculatorState, variant: string): CalculatorDiagramView {
+  const label = state.display.label.trim();
+  const unitless = state.triangleUnitless === true;
+  const hip = sequenceResultValue(state, /^(?:I?H\/V)$/);
+  const jack = sequenceResultValue(state, /^(?:JK|IJ)\d+$/);
+  const onCenter = sequenceResultValue(state, /^(?:JK|IJ)OC(?: STORED)?$/);
+  const isJack = variant === 'jacks' || variant === 'ir-jacks';
+  const isIrregularHip = variant === 'hip' && Boolean(
+    label === 'IH/V'
+    || label === 'CHK2'
+    || state.sequence?.results.some((result) => result.label === 'CHK2'),
+  );
+  const hasIrregularJackSide = isJack && Boolean(
+    state.sequence?.results.some((result) => /^IJ(?:OC|\d)/.test(result.label)),
+  );
+  const diagramVariant = isIrregularHip
+    ? 'ir-hip'
+    : hasIrregularJackSide
+      ? 'ir-jacks'
+      : variant;
+  const currentJack = label.match(/^(JK|IJ)(\d+)$/);
+  const currentJackPrefix = currentJack?.[1];
+  const jackMemberCount = currentJackPrefix && state.sequence
+    ? state.sequence.results.filter((result) => (
+        new RegExp(`^${currentJackPrefix}\\d+$`).test(result.label)
+      )).length
+    : 0;
+  const jackMemberIndex = currentJack ? Number(currentJack[2]) : undefined;
+  const memberProgress = jackMemberIndex === undefined || jackMemberCount === 0
+    ? undefined
+    : state.preferences.jackOrder === 'ascending'
+      ? jackMemberIndex / (jackMemberCount + 1)
+      : (jackMemberCount - jackMemberIndex + 1) / (jackMemberCount + 1);
+  const memberSide = label === 'CHK2'
+    ? 'irregular'
+    : isIrregularHip && label === 'CHK1'
+      ? 'regular'
+      : jackSideForResult(state.sequence, state.sequence?.index, label);
+  return finishDiagram(state, {
+    kind: 'roof',
+    variant: diagramVariant,
+    title: isJack
+      ? 'Jack rafters · Roof plan and true-length elevation'
+      : 'Hip / valley · Roof plan and true-length elevation',
+    geometry: {
+      memberIndex: jackMemberIndex,
+      memberCount: jackMemberCount || undefined,
+      memberProgress,
+      memberSide,
+    },
+    metrics: [
+      diagramMetric(
+        'run', 'x', 'Roof run',
+        diagramLinearValue(
+          state,
+          state.triangle.x,
+          state.triangleUnits.x ?? state.resultUnit,
+          unitless,
+          state.triangleFractionDenominators.x,
+          state.triangleInputValues.x,
+        ),
+        state.triangleInputs.includes('x'), false, 'enter run',
+      ),
+      diagramMetric(
+        'rise', 'y', 'Roof rise',
+        diagramLinearValue(
+          state,
+          state.triangle.y,
+          state.triangleUnits.y ?? state.resultUnit,
+          unitless,
+          state.triangleFractionDenominators.y,
+          state.triangleInputValues.y,
+        ),
+        state.triangleInputs.includes('y'), false, 'from pitch',
+      ),
+      diagramMetric(
+        'hip', 'H/V', 'Hip / valley length', diagramValue(hip, state),
+        false, label === 'H/V' || label === 'IH/V', 'after solve',
+      ),
+      diagramMetric(
+        'jack', currentJack?.[0] ?? 'JK', 'Current jack rafter',
+        diagramValue(currentJack ? state.current : jack, state),
+        false, /^(?:JK|IJ)\d+$/.test(label), isJack ? 'cycle Jack' : 'after solve',
+      ),
+      diagramMetric(
+        'spacing', 'OC', 'On-center spacing',
+        diagramValue(/^(?:JK|IJ)OC/.test(label) ? state.current : onCenter, state)
+          ?? diagramLinearValue(
+            state,
+            state.preferences.onCenter,
+            'in',
+            false,
+            undefined,
+            state.linearPreferenceInputValues.onCenter,
+          ),
+        state.onCenterStored === true,
+        /^(?:JK|IJ)OC/.test(label), 'stored setting',
+      ),
+      diagramMetric(
+        'plumb', 'PLMB', 'Plumb cut angle',
+        diagramValue(label === 'PLMB' ? state.current : sequenceResultValue(state, 'PLMB'), state),
+        false, label === 'PLMB', 'after solve',
+      ),
+      diagramMetric(
+        'level', 'LEVL', 'Level cut angle',
+        diagramValue(label === 'LEVL' ? state.current : sequenceResultValue(state, 'LEVL'), state),
+        false, label === 'LEVL', 'after solve',
+      ),
+      diagramMetric(
+        'cheek', 'CHK', 'Cheek cut angle',
+        diagramValue(/^CHK[12]$/.test(label)
+          ? state.current
+          : sequenceResultValue(state, 'CHK1'), state),
+        false, /^CHK[12]$/.test(label), 'after solve',
+      ),
+    ],
+  });
+}
+
+function stairDiagram(state: CalculatorState): CalculatorDiagramView {
+  const label = state.display.label.trim();
+  const run = sequenceResultValue(state, /^RUN/);
+  const rise = sequenceResultValue(state, /^RISE/);
+  const riser = label === 'R-HT STORED'
+    ? state.current
+    : sequenceResultValue(state, 'R-HT');
+  return finishDiagram(state, {
+    kind: 'stairs',
+    title: 'Stair layout · Total dimensions and individual steps',
+    metrics: [
+      diagramMetric(
+        'run', 'Run', 'Total run', state.triangleInputs.includes('x')
+          ? diagramLinearValue(
+              state,
+              state.triangle.x,
+              state.triangleUnits.x ?? state.resultUnit,
+              state.triangleUnitless === true,
+              state.triangleFractionDenominators.x,
+              state.triangleInputValues.x,
+            )
+          : diagramValue(run, state),
+        state.triangleInputs.includes('x'), /^RUN/.test(label), 'calculated if omitted',
+      ),
+      diagramMetric(
+        'rise', 'Rise', 'Total rise', state.triangleInputs.includes('y')
+          ? diagramLinearValue(
+              state,
+              state.triangle.y,
+              state.triangleUnits.y ?? state.resultUnit,
+              state.triangleUnitless === true,
+              state.triangleFractionDenominators.y,
+              state.triangleInputValues.y,
+            )
+          : diagramValue(rise, state),
+        state.triangleInputs.includes('y'), /^RISE/.test(label), 'calculated if omitted',
+      ),
+      diagramMetric(
+        'stringer', 'STRG', 'Stringer', diagramValue(sequenceResultValue(state, 'STRG'), state),
+        false, label === 'STRG', 'after solve',
+      ),
+      diagramMetric(
+        'riser', 'R-HT', 'Riser height', diagramValue(riser, state),
+        label === 'R-HT STORED', /^(?:R-HT|RSRS|R\+\/−)/.test(label), 'after solve',
+      ),
+      diagramMetric(
+        'tread', 'T-WD', 'Tread width', diagramValue(sequenceResultValue(state, 'T-WD'), state),
+        false, /^(?:T-WD|TRDS|T\+\/−)/.test(label), 'after solve',
+      ),
+      diagramMetric(
+        'opening', 'OPEN', 'Stairwell opening', diagramValue(sequenceResultValue(state, 'OPEN'), state),
+        false, label === 'OPEN', 'after solve',
+      ),
+      diagramMetric(
+        'incline', 'INCL', 'Incline angle', diagramValue(sequenceResultValue(state, 'INCL'), state),
+        false, label === 'INCL', 'after solve',
+      ),
+      diagramMetric(
+        'headroom', 'HDRM', 'Preferred headroom', diagramValue(sequenceResultValue(state, 'HDRM STORED'), state),
+        false, label === 'HDRM STORED', 'stored setting',
+      ),
+      diagramMetric(
+        'floor', 'FLOR', 'Floor thickness', diagramValue(sequenceResultValue(state, 'FLOR STORED'), state),
+        false, label === 'FLOR STORED', 'stored setting',
+      ),
+    ],
+  });
+}
+
+function solidsDiagram(state: CalculatorState): CalculatorDiagramView {
+  const label = state.display.label.trim();
+  const radius = state.circle.radius
+    ?? (state.circle.diameter === undefined ? undefined : state.circle.diameter / 2);
+  const diameter = state.circle.diameter ?? (radius === undefined ? undefined : radius * 2);
+  const height = state.circle.height ?? state.triangle.y;
+  const unit = state.circleRadiusUnit ?? state.circleResultUnit ?? state.resultUnit;
+  return finishDiagram(state, {
+    kind: 'solids',
+    variant: label.startsWith('CONE') ? 'cone' : 'column',
+    title: 'Column / cone · Radius, Height and Surface',
+    metrics: [
+      diagramMetric(
+        'diameter', 'Ø', 'Diameter', diagramLinearValue(
+          state,
+          diameter,
+          unit,
+          false,
+          state.circleInput === 'diameter' ? state.circleInputFractionDenominator : undefined,
+          state.circleInput === 'diameter' ? state.circleInputValue : undefined,
+        ),
+        state.circleInput === 'diameter', false, 'enter with Circ',
+      ),
+      diagramMetric(
+        'radius', 'r', 'Radius', diagramLinearValue(
+          state,
+          radius,
+          unit,
+          false,
+          state.circleInput === 'radius' ? state.circleInputFractionDenominator : undefined,
+          state.circleInput === 'radius' ? state.circleInputValue : undefined,
+        ),
+        state.circleInput === 'radius', false, 'enter with Conv + Pitch',
+      ),
+      diagramMetric(
+        'height', 'h', 'Height',
+        diagramLinearValue(
+          state,
+          height,
+          state.circleHeightUnit ?? state.triangleUnits.y ?? state.resultUnit,
+          false,
+          state.triangleInputs.includes('y')
+            ? state.triangleFractionDenominators.y
+            : undefined,
+          state.triangleInputs.includes('y')
+            ? state.triangleInputValues.y
+            : undefined,
+        ),
+        state.triangleInputs.includes('y'), false, 'enter with Rise',
+      ),
+      diagramMetric(
+        'column', 'COL', label === 'COL AREA' ? 'Column total surface' : 'Column volume',
+        diagramValue(sequenceResultValue(state, label.startsWith('COL') ? label : 'COL'), state),
+        false, label.startsWith('COL'), 'after solve',
+      ),
+      diagramMetric(
+        'cone', 'CONE', label === 'CONE AREA' ? 'Cone total surface' : 'Cone volume',
+        diagramValue(sequenceResultValue(state, label.startsWith('CONE') ? label : 'CONE'), state),
+        false, label.startsWith('CONE'), 'after solve',
+      ),
+    ],
+  });
+}
+
+function fanLawDiagram(state: CalculatorState, force = false): CalculatorDiagramView | undefined {
+  const label = state.display.label.trim();
+  const fanMatch = label.match(/^(CFM|CFMn|RPM|RPMn|SP|SPn|BHP|BHPn) FAN LAW ([123])$/);
+  const hasIntent = Boolean(fanMatch || state.registers.aNew || state.registers.bNew);
+  // A stale C register belongs to Law of Cosines, but must not hide an explicit
+  // Fan Law result; the 4090 intentionally shares these registers.
+  if (!hasIntent || (!force && state.registers.c && !fanMatch)) return undefined;
+  const storedActiveId = label === 'A STORED' && state.diagramFocus === 'fan-law'
+    ? 'a'
+    : label === 'B STORED' && state.diagramFocus === 'fan-law'
+      ? 'b'
+      : label === 'An STORED'
+        ? 'a-new'
+        : label === 'Bn STORED'
+          ? 'b-new'
+          : undefined;
+  const activeId = fanMatch
+    ? fanMatch[1] === 'CFM' ? 'a'
+      : fanMatch[1] === 'CFMn' ? 'a-new'
+        : fanMatch[1].endsWith('n') ? 'b-new' : 'b'
+    : storedActiveId;
+  const field = (
+    id: string,
+    symbol: string,
+    fieldLabel: string,
+    value: CalcValue | undefined,
+  ) => {
+    const isKnownInput = Boolean(
+      value
+      && Number.isFinite(value.amount)
+      && value.amount > 0
+      && !value.semanticKind,
+    );
+    const visibleValue = value && Number.isFinite(value.amount) && value.amount > 0
+      ? value
+      : undefined;
+    return diagramMetric(
+      id,
+      symbol,
+      fieldLabel,
+      diagramValue(visibleValue, state),
+      isKnownInput,
+      activeId === id,
+      'enter a positive value',
+    );
+  };
+  return finishDiagram(state, {
+    kind: 'fan-law',
+    variant: fanMatch?.[2],
+    title: fanMatch ? `Fan Law ${fanMatch[2]} · Existing to new condition` : 'Fan Law inputs · Existing to new condition',
+    metrics: [
+      field('a', 'A', 'Existing airflow', state.registers.a),
+      field('a-new', 'Aₙ', 'New airflow', state.registers.aNew),
+      field('b', 'B', 'Existing RPM / SP / BHP', state.registers.b),
+      field('b-new', 'Bₙ', 'New RPM / SP / BHP', state.registers.bNew),
+    ],
+  });
+}
+
+function hasValidStagedOffset(state: CalculatorState): boolean {
+  const { x, y } = state.triangle;
+  const endA = state.registers.a;
+  if (
+    x === undefined
+    || y === undefined
+    || !Number.isFinite(x)
+    || !Number.isFinite(y)
+    || x <= 0
+    || y <= 0
+    || !endA
+    || !Number.isFinite(endA.amount)
+    || endA.amount < 0
+    || endA.angle
+  ) return false;
+  const correctPower = state.triangleUnitless === true
+    ? endA.power === 0
+    : endA.power === 0 || endA.power === 1;
+  if (!correctPower) return false;
+  const centerlineRadius = (x ** 2 + y ** 2) / (4 * y);
+  return centerlineRadius - endA.amount / 2 >= 0;
+}
+
+export function calculatorDiagramView(state: CalculatorState): CalculatorDiagramView | undefined {
+  if (
+    !state.powered
+    || state.display.label === 'ERROR'
+    || state.preferenceMode
+    || state.preferencesOpen
+    || state.modifier === 'recall'
+    || state.modifier === 'recall-convert'
+  ) return undefined;
+
+  const hasOrdinaryMath = Boolean(
+    state.expression.length
+    || state.parenthesisDepth
+    || state.completedExpression.length
+    || state.displayExpression.some((token) => (
+      token.type === 'operator'
+      || token.type === 'left'
+      || token.type === 'right'
+      || token.type === 'function-open'
+      || token.type === 'function-close'
+      || token.type === 'postfix'
+    )),
+  );
+  if (hasOrdinaryMath) return undefined;
+
+  const sequenceId = state.sequence && sequenceIsDisplayed(state)
+    ? state.sequence.id
+    : undefined;
+  if (sequenceId === 'pitch' || sequenceId === 'diag') {
+    return rightTriangleDiagram(state, sequenceId, true);
+  }
+  if (sequenceId === 'circle') return circleDiagram(state);
+  if (sequenceId === 'arc') return segmentDiagram(state, 'arc');
+  if (sequenceId === 'offset') return offsetDiagram(state);
+  if (sequenceId === 'lawcos') return lawCosinesDiagram(state, true);
+  if (sequenceId === 'hip' || sequenceId === 'jacks' || sequenceId === 'ir-jacks') {
+    return roofDiagram(state, sequenceId);
+  }
+  if (sequenceId === 'stairs') return stairDiagram(state);
+  if (sequenceId === 'column-cone') return solidsDiagram(state);
+
+  const label = state.display.label.trim();
+  // Only while the irregular pitch is the value on screen, or while a new one is
+  // being typed into it. A lingering irregular-pitch focus must never shadow the
+  // Pitch/Jack/Stair recalls or draw a roof behind an unrelated operand.
+  if (
+    /^IPCH(?: STORED)?$/.test(label)
+    || (state.diagramFocus === 'irregular-pitch' && hasPendingDiagramEntry(state))
+  ) {
+    return irregularPitchDiagram(state);
+  }
+  if (/^(?:PTCH|PTCH STORED|∠θ|%GRD|SLP|PLMB|LEVL)$/.test(label)) {
+    return rightTriangleDiagram(state, 'pitch', true);
+  }
+  if (/^(?:An|Bn) STORED$/.test(label)) return fanLawDiagram(state, true);
+  if (/^(?:JK|IJ)OC(?: STORED)?$/.test(label)) {
+    return roofDiagram(state, label.startsWith('IJ') ? 'ir-jacks' : 'jacks');
+  }
+  if (label === 'R-HT STORED') return stairDiagram(state);
+  if (label === 'A STORED' && state.diagramFocus === 'offset') {
+    return hasValidStagedOffset(state) ? offsetDiagram(state) : undefined;
+  }
+  if (/^[AB] STORED$/.test(label) && state.diagramFocus === 'fan-law') {
+    return fanLawDiagram(state, true);
+  }
+  if (state.diagramFocus === 'fan-law' && /FAN LAW/.test(label)) {
+    return fanLawDiagram(state, true);
+  }
+  if (/^[ABC] STORED$/.test(label)) return lawCosinesDiagram(state, true);
+
+  const activeTriangleKey = label === 'X' ? 'x' : label === 'Y' ? 'y' : label === 'R' ? 'r' : undefined;
+  const activeTriangleValue = activeTriangleKey ? state.triangle[activeTriangleKey] : undefined;
+  const currentMatchesTriangle = activeTriangleValue !== undefined
+    && state.current !== undefined
+    && Number.isFinite(state.current.amount)
+    && Math.abs(state.current.amount - activeTriangleValue)
+      <= Math.max(1, Math.abs(activeTriangleValue)) * 1e-12;
+  const pendingDiagramEntry = hasPendingDiagramEntry(state);
+  const triangleDisplayIsCurrent = Boolean(
+    activeTriangleKey
+    || ['PTCH', 'PTCH STORED', '∠θ', '%GRD', 'SLP', 'PLMB', 'LEVL'].includes(label)
+    || pendingDiagramEntry,
+  );
+  if (state.diagramFocus === 'triangle' && triangleDisplayIsCurrent) {
+    const triangle = rightTriangleDiagram(state, 'triangle', true);
+    if (triangle) return triangle;
+  }
+
+  const segmentDisplayIsCurrent = Boolean(
+    ['RAD', 'CORD', 'RISE', 'ARC'].includes(label)
+    || (['X', 'Y'].includes(label) && state.diagramFocus !== 'triangle')
+    || pendingDiagramEntry
+    || !state.current,
+  );
+  const hasSegmentContext = Boolean(
+    state.circle.radius !== undefined
+    && segmentDisplayIsCurrent
+    && (
+      state.segmentInputs.length
+      || (
+        state.segmentRadiusReady
+        && (['RAD', 'CORD', 'RISE'].includes(label) || hasPendingDiagramEntry(state))
+      )
+      || (state.arcInput && (label === 'ARC' || hasPendingDiagramEntry(state)))
+    )
+  );
+  if (hasSegmentContext) return segmentDiagram(state);
+
+  if (activeTriangleKey && currentMatchesTriangle) {
+    return rightTriangleDiagram(state, 'triangle', true);
+  }
+
+  // A committed unit, constant, conversion, or recalled/stored operand is not
+  // part of older geometry until the operator assigns it with a geometry key.
+  // Suppress that stale drawing instead of implying that it describes the
+  // value currently visible on the screen. Raw digits remain diagram-aware so
+  // the drawing can still guide the next Run/Rise/etc. assignment.
+  if (state.current && !pendingDiagramEntry) return undefined;
+
+  const fanLaw = fanLawDiagram(state);
+  if (fanLaw) return fanLaw;
+
+  const triangle = rightTriangleDiagram(state);
+  if (triangle) return triangle;
+  const lawCosines = lawCosinesDiagram(state);
+  if (lawCosines) return lawCosines;
+  if (state.circle.radius !== undefined || state.circle.diameter !== undefined) {
+    return circleDiagram(state);
+  }
+  return undefined;
 }
 
 export function calculatorExpressionView(state: CalculatorState): CalculatorExpressionView {
@@ -1416,16 +2684,18 @@ export function calculatorExpressionView(state: CalculatorState): CalculatorExpr
         : expressionText
       ).replace(/^≈\s*/, '')
     : undefined;
+  // The percent sign now travels with the formatted value itself, so only the
+  // spelled-out suffixes are appended here.
   const namedValueSuffix = pitchGradeResult
-    ? '%'
+    ? undefined
     : state.current?.semanticKind
       ? undefined
       : namedResult?.suffix;
   const namedValueText = namedResult?.empty
     ? namedResult.emptyText ?? 'Recall returns 0'
     : namedResult && namedValueBase
-      ? `${namedValueBase}${namedValueSuffix
-      ? namedValueSuffix === '%' ? '%' : namedValueSuffix === '% grade' ? '% grade' : ` ${namedValueSuffix}`
+      ? `${namedValueSuffix ? namedValueBase.replace(/%$/, '') : namedValueBase}${namedValueSuffix
+      ? namedValueSuffix === '% grade' ? '% grade' : ` ${namedValueSuffix}`
       : ''}`
       : undefined;
   const equationAriaText = resultText && resultText !== expressionText
@@ -1486,6 +2756,7 @@ export function calculatorExpressionView(state: CalculatorState): CalculatorExpr
     : namedResult
       ? 'named-result'
       : resultText ? 'equation' : 'entry';
+  const diagram = calculatorDiagramView(state);
 
   return {
     mode,
@@ -1511,5 +2782,6 @@ export function calculatorExpressionView(state: CalculatorState): CalculatorExpr
     liveText,
     ariaText,
     entryActive,
+    diagram,
   };
 }

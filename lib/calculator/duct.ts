@@ -476,6 +476,13 @@ const STANDARD_RECTANGULAR_SIDES = [
 ];
 
 export const MAX_RECTANGULAR_FRICTION_DIFFERENCE_PERCENT = 10;
+/**
+ * ASHRAE's rectangular equivalent relationship is intended for ordinary HVAC
+ * turbulent flow. Below this Reynolds number the app already classifies the
+ * result as laminar/transitional, where the round-duct surrogate must not be
+ * presented as a verified equal-friction rectangular match.
+ */
+export const MIN_RECTANGULAR_EQUIVALENT_REYNOLDS = 10_000;
 
 export function promoteDuctInput(
   order: DuctField[],
@@ -494,10 +501,10 @@ export function rectangularEquivalents(
   if (!Number.isInteger(limit) || limit <= 0) throw new RangeError('Limit must be a positive integer.');
 
   const candidates: RectangularEquivalent[] = [];
-  const targetFrictionRate = ductFrictionRate(
-    velocityFromAirflowAndDiameter(airflowCfm, diameterIn),
-    diameterIn,
-  );
+  const targetVelocity = velocityFromAirflowAndDiameter(airflowCfm, diameterIn);
+  const targetReynolds = ductReynolds(targetVelocity, diameterIn);
+  if (targetReynolds < MIN_RECTANGULAR_EQUIVALENT_REYNOLDS) return [];
+  const targetFrictionRate = ductFrictionRate(targetVelocity, diameterIn);
   for (const heightIn of STANDARD_RECTANGULAR_SIDES) {
     for (const widthIn of STANDARD_RECTANGULAR_SIDES) {
       if (widthIn < heightIn || widthIn / heightIn > 4) continue;

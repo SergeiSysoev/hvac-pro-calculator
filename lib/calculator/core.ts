@@ -1,6 +1,7 @@
 export type UnitHint =
   | 'auto'
   | 'ft-in'
+  | 'ft-decimal-in'
   | 'decimal-ft'
   | 'decimal-in'
   | 'in'
@@ -186,7 +187,7 @@ function preferredComputedSourceUnit(
 }
 
 function standardComputedUnit(unit: UnitHint): UnitHint {
-  if (unit === 'decimal-ft') return 'ft-in';
+  if (unit === 'decimal-ft' || unit === 'ft-decimal-in') return 'ft-in';
   if (unit === 'decimal-in') return 'in';
   return unit;
 }
@@ -400,7 +401,7 @@ export function cube(value: CalcValue): CalcValue {
 }
 
 function baseUnitFromHint(unit: UnitHint): 'ft' | 'in' | 'm' | 'mm' | undefined {
-  if (unit === 'ft-in' || unit === 'decimal-ft' || unit === 'sq-ft' || unit === 'cu-ft') return 'ft';
+  if (unit === 'ft-in' || unit === 'ft-decimal-in' || unit === 'decimal-ft' || unit === 'sq-ft' || unit === 'cu-ft') return 'ft';
   if (unit === 'in' || unit === 'decimal-in' || unit === 'sq-in' || unit === 'cu-in') return 'in';
   if (unit === 'm' || unit === 'sq-m' || unit === 'cu-m') return 'm';
   if (unit === 'mm' || unit === 'sq-mm' || unit === 'cu-mm') return 'mm';
@@ -686,10 +687,33 @@ export function formatValue(
       options.scalarSignificantDigits ?? 7,
       8,
     );
+    // Percent grade carries its notation the way an angle carries the degree
+    // sign, so every surface that formats the value shows the same text.
+    if (value.semanticKind === 'percent-grade') {
+      const graded = `${text.replace(/\.$/, '')}%`;
+      return { valueText: graded, unitText: '', plainText: graded };
+    }
     return { valueText: text, unitText: '', plainText: text };
   }
 
   if (value.power === 1) {
+    if (value.unit === 'ft-decimal-in') {
+      const negative = value.amount < 0;
+      const absoluteInches = Math.abs(value.amount);
+      let feet = Math.floor(absoluteInches / 12);
+      let inches = absoluteInches - feet * 12;
+      if (Math.abs(inches - 12) < 1e-10) {
+        feet += 1;
+        inches = 0;
+      }
+      const inchText = compactNumber(inches, 6, preferences.exponent, 7).replace(/\.$/, '');
+      const sign = negative ? '−' : '';
+      return {
+        valueText: `${sign}${feet} - ${inchText}`,
+        unitText: 'FEET        INCH',
+        plainText: `${sign}${feet}′ ${inchText}″`,
+      };
+    }
     if (value.unit === 'decimal-ft') {
       const feet = value.amount / 12;
       if (Math.abs(feet) > DISPLAY_MAX && !preferences.exponent) return decimalDisplay(feet / 3, 'YARDS', preferences);

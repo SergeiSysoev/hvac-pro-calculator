@@ -15,6 +15,20 @@ function digits(value: string): KeyId[] {
   return [...value].map((key) => key === '.' ? 'decimal' : key as KeyId);
 }
 
+function advanceToLabel(
+  initial: CalculatorState,
+  trigger: KeyId,
+  label: string,
+): CalculatorState {
+  let state = initial;
+  const limit = (state.sequence?.results.length ?? 0) + 2;
+  for (let step = 0; step < limit; step += 1) {
+    if (state.display.label === label) return state;
+    state = run([trigger], state);
+  }
+  throw new Error(`Could not reach ${label}`);
+}
+
 describe('physical keypad workflow', () => {
   it('runs direct converted buttons atomically even when Recall was armed', () => {
     const recalled = run(['8', 'recall']);
@@ -62,6 +76,55 @@ describe('physical keypad workflow', () => {
     });
   });
 
+  it('round-trips exact permanent field-entry representations through persistence', () => {
+    const stored = run([
+      '7', 'inch', '3', 'fraction', '6', '4', 'pitch', 'on',
+      '8', 'inch', '3', 'fraction', '6', '4', 'conv', 'hip', 'on',
+      '1', '5', 'inch', '3', 'fraction', '6', '4', 'jack', 'on',
+      '7', 'inch', '1', 'fraction', '6', '4', 'conv', 'stair',
+    ]);
+    const hydrated = calculatorReducer(initialCalculatorState(), {
+      type: 'hydrate',
+      payload: persistedState(stored),
+    });
+
+    expect(run(['recall', 'pitch'], hydrated).display.valueText).toBe('7 3/64');
+    expect(run(['recall', 'conv', 'hip'], hydrated).display.valueText).toBe('8 3/64');
+    expect(run(['recall', 'jack'], hydrated).display.valueText).toBe('15 3/64');
+    expect(run(['recall', 'stair'], hydrated).display.valueText).toBe('7 1/64');
+  });
+
+  it('migrates legacy saved settings into exact modern display representations', () => {
+    const seed = initialCalculatorState();
+    const hydrated = calculatorReducer(seed, {
+      type: 'hydrate',
+      payload: {
+        preferences: {
+          ...seed.preferences,
+          onCenter: 15.03,
+          desiredRiser: 7.03,
+          treadWidth: 10.03,
+          headroom: 80.03,
+          floorThickness: 11.03,
+        },
+        permanentPitchSlope: 7.03 / 12,
+        irregularPitchSlope: 8.03 / 12,
+        onCenterStored: true,
+        memory: {},
+      },
+    });
+
+    expect(run(['recall', 'pitch'], hydrated).display.valueText).toBe('7.03');
+    expect(run(['recall', 'conv', 'hip'], hydrated).display.valueText).toBe('8.03');
+    expect(run(['recall', 'jack'], hydrated).display.valueText).toBe('15.03');
+    expect(run(['recall', 'stair'], hydrated).display.valueText).toBe('7.03');
+
+    const stairs = run(['1', '0', 'feet', 'rise', '1', '2', 'feet', 'run', 'stair'], hydrated);
+    expect(advanceToLabel(stairs, 'stair', 'T-WD STORED').display.valueText).toBe('10.03');
+    expect(advanceToLabel(stairs, 'stair', 'HDRM STORED').display.valueText).toBe('80.03');
+    expect(advanceToLabel(stairs, 'stair', 'FLOR STORED').display.valueText).toBe('11.03');
+  });
+
   it('evaluates order of operations from key presses', () => {
     const state = run([
       ...digits('10'), 'add', ...digits('4'), 'multiply', ...digits('5'), 'equals',
@@ -89,6 +152,28 @@ describe('physical keypad workflow', () => {
     ]);
     expect(state.current?.power).toBe(2);
     expect(state.current!.amount / 144).toBeCloseTo(60.59375, 8);
+  });
+
+  it('keeps mixed feet plus decimal inches exact on entry and through field cycles', () => {
+    const entered = run(['8', 'feet', ...digits('2.03'), 'inch']);
+    expect(entered.display).toMatchObject({
+      valueText: '8 - 2.03',
+      unitText: 'FEET        INCH',
+      plainText: '8\u2032 2.03\u2033',
+    });
+
+    const storedRun = run(['run'], entered);
+    expect(storedRun.display).toMatchObject({
+      label: 'X',
+      valueText: '8 - 2.03',
+      plainText: '8\u2032 2.03\u2033',
+    });
+    const stairs = run(['1', '0', 'feet', 'rise', 'stair'], storedRun);
+    expect(advanceToLabel(stairs, 'stair', 'RUN (X) STORED').display.valueText)
+      .toBe('8 - 2.03');
+
+    const small = run(['8', 'feet', ...digits('0.03'), 'inch', 'run']);
+    expect(small.display).toMatchObject({ valueText: '8 - 0.03', plainText: '8\u2032 0.03\u2033' });
   });
 
   it('keeps the complete feet-inch value visible while its fraction is entered', () => {
@@ -292,6 +377,314 @@ describe('physical keypad workflow', () => {
     ]);
     expect(state.current?.amount).toBeCloseTo(75, 10);
     expect(state.display.label).toBe('RAD');
+  });
+
+  it('keeps exact entered fractions when Offset and Law of Cosines revisit stored inputs', () => {
+    const offset = run([
+      '3', 'fraction', '6', '4', 'run',
+      '1', 'fraction', '6', '4', 'rise',
+      '1', 'fraction', '6', '4', 'conv', '4',
+      'conv', 'left',
+    ]);
+    const offsetX = run(['left', 'left', 'left', 'left', 'left'], offset);
+    const offsetY = run(['left'], offsetX);
+    const offsetA = run(['left'], offsetY);
+
+    expect(offsetX.display).toMatchObject({ label: 'X', valueText: '0 3/64', unitText: 'INCH' });
+    expect(offsetY.display).toMatchObject({ label: 'Y', valueText: '0 1/64', unitText: 'INCH' });
+    expect(offsetA.display).toMatchObject({ label: 'A STORED', valueText: '0 1/64', unitText: 'INCH' });
+    expect(offsetX.current?.fractionDenominator).toBe(64);
+    expect(offsetY.current?.fractionDenominator).toBe(64);
+    expect(offsetA.current?.fractionDenominator).toBe(64);
+
+    const lawA = run([
+      '3', 'fraction', '6', '4', 'conv', '4',
+      '4', 'fraction', '6', '4', 'conv', '5',
+      '5', 'fraction', '6', '4', 'conv', '6',
+      'conv', '9',
+    ]);
+    const sideA = run(['9', '9', '9', '9'], lawA);
+    const sideB = run(['9'], sideA);
+    const sideC = run(['9'], sideB);
+
+    expect(sideA.display).toMatchObject({ label: 'a', valueText: '0 3/64', unitText: 'INCH' });
+    expect(sideB.display).toMatchObject({ label: 'b', valueText: '0 1/16', unitText: 'INCH' });
+    expect(sideC.display).toMatchObject({ label: 'c', valueText: '0 5/64', unitText: 'INCH' });
+    expect(sideA.current?.fractionDenominator).toBe(64);
+    expect(sideB.current?.fractionDenominator).toBe(64);
+    expect(sideC.current?.fractionDenominator).toBe(64);
+  });
+
+  it('keeps decimal-inch source text throughout Circle, Pitch, Offset, and LawCos cycles', () => {
+    const circle = run([...digits('0.03'), 'inch', 'circ']);
+    const circleAgain = run(['circ', 'circ', 'circ'], circle);
+    expect(circle.display).toMatchObject({ label: 'DIA', valueText: '0.03', unitText: 'INCH' });
+    expect(circleAgain.display).toMatchObject({ label: 'DIA', valueText: '0.03', unitText: 'INCH' });
+    const bareCircle = run([...digits('0.03'), 'circ']);
+    expect(bareCircle.display).toMatchObject({ label: 'DIA', valueText: '0.03', unitText: 'INCH' });
+
+    const arc = run([
+      '1', '0', 'inch', 'circ',
+      ...digits('0.03'), 'inch', 'conv', 'circ',
+    ]);
+    expect(arc.display).toMatchObject({ label: 'ARC', valueText: '0.03', unitText: 'INCH' });
+    expect(run(['circ'], arc).display).toMatchObject({ label: 'ARC', unitText: 'DEG' });
+
+    const pitch = run([...digits('0.03'), 'inch', 'pitch']);
+    const recalledPitch = run(['on', 'recall', 'pitch'], pitch);
+    expect(pitch.display).toMatchObject({ label: 'PTCH', valueText: '0.03', unitText: 'INCH' });
+    expect(recalledPitch.display).toMatchObject({ label: 'PTCH STORED', valueText: '0.03', unitText: 'INCH' });
+
+    const offset = run([
+      ...digits('0.03'), 'inch', 'run',
+      ...digits('0.04'), 'inch', 'rise',
+      ...digits('0.01'), 'inch', 'conv', '4',
+      'conv', 'left',
+    ]);
+    const offsetX = run(['left', 'left', 'left', 'left', 'left'], offset);
+    const offsetY = run(['left'], offsetX);
+    const offsetA = run(['left'], offsetY);
+    expect(offsetX.display).toMatchObject({ label: 'X', valueText: '0.03', unitText: 'INCH' });
+    expect(offsetY.display).toMatchObject({ label: 'Y', valueText: '0.04', unitText: 'INCH' });
+    expect(offsetA.display).toMatchObject({ label: 'A STORED', valueText: '0.01', unitText: 'INCH' });
+
+    const lawCos = run([
+      ...digits('0.03'), 'inch', 'conv', '4',
+      ...digits('0.04'), 'inch', 'conv', '5',
+      ...digits('0.05'), 'inch', 'conv', '6',
+      'conv', '9',
+    ]);
+    const sideA = run(['9', '9', '9', '9'], lawCos);
+    const sideB = run(['9'], sideA);
+    const sideC = run(['9'], sideB);
+    expect(sideA.display).toMatchObject({ label: 'a', valueText: '0.03', unitText: 'INCH' });
+    expect(sideB.display).toMatchObject({ label: 'b', valueText: '0.04', unitText: 'INCH' });
+    expect(sideC.display).toMatchObject({ label: 'c', valueText: '0.05', unitText: 'INCH' });
+  });
+
+  it('preserves exact stored Pitch, Ir/Pitch, Jack OC, Riser, and Arc operands', () => {
+    const pitch = run(['7', 'inch', '3', 'fraction', '6', '4', 'pitch']);
+    const recalledPitch = run(['on', 'recall', 'pitch'], pitch);
+    expect(pitch.display).toMatchObject({ label: 'PTCH', valueText: '7 3/64', unitText: 'INCH' });
+    expect(recalledPitch.display).toMatchObject({ label: 'PTCH STORED', valueText: '7 3/64', unitText: 'INCH' });
+
+    const irregular = run(['8', 'inch', '3', 'fraction', '6', '4', 'conv', 'hip']);
+    const recalledIrregular = run(['on', 'recall', 'conv', 'hip'], irregular);
+    expect(irregular.display).toMatchObject({ label: 'IPCH', valueText: '8 3/64', unitText: 'INCH' });
+    expect(recalledIrregular.display).toMatchObject({ label: 'IPCH STORED', valueText: '8 3/64', unitText: 'INCH' });
+
+    const storedJack = run(['1', '5', 'inch', '3', 'fraction', '6', '4', 'jack']);
+    const jack = run(['7', 'inch', 'pitch', '4', 'feet', 'run', 'jack'], storedJack);
+    expect(jack.display).toMatchObject({ label: 'JKOC STORED', valueText: '15 3/64', unitText: 'INCH' });
+    expect(run(['on', 'recall', 'jack'], jack).display).toMatchObject({
+      label: 'JKOC STORED', valueText: '15 3/64', unitText: 'INCH',
+    });
+
+    const storedRiser = run(['7', 'inch', '3', 'fraction', '6', '4', 'conv', 'stair']);
+    const stairs = run(['1', '0', 'feet', 'rise', '1', '2', 'feet', 'run', 'stair'], storedRiser);
+    const storedRiserResult = run(Array.from({ length: 11 }, () => 'stair' as const), stairs);
+    expect(storedRiserResult.display).toMatchObject({
+      label: 'R-HT STORED', valueText: '7 3/64', unitText: 'INCH',
+    });
+    expect(run(['on', 'recall', 'stair'], storedRiserResult).display).toMatchObject({
+      label: 'R-HT STORED', valueText: '7 3/64', unitText: 'INCH',
+    });
+
+    const arc = run([
+      '2', '0', 'inch', '1', 'fraction', '6', '4', 'conv', 'pitch',
+      '1', '0', 'inch', '1', 'fraction', '6', '4', 'run',
+      'conv', 'circ',
+    ]);
+    const chordResult = arc.sequence?.results.find((result) => result.label === 'CORD');
+    expect(chordResult?.value.fractionDenominator).toBe(64);
+    expect(chordResult?.value.amount).toBeCloseTo(10 + 1 / 64, 10);
+  });
+
+  it('preserves decimal Arc length when the stored Arc is recalled after On/C', () => {
+    const entered = run([
+      '2', '0', 'inch', 'conv', 'pitch',
+      ...digits('3.03'), 'inch', 'conv', 'circ',
+    ]);
+    expect(entered.display).toMatchObject({ label: 'ARC', valueText: '3.03', unitText: 'INCH' });
+
+    const recalled = run(['on', 'conv', 'circ'], entered);
+    expect(recalled.display).toMatchObject({ label: 'ARC', valueText: '3.03', unitText: 'INCH' });
+  });
+
+  it('preserves decimal and fractional Radius when the stored radius is recalled after On/C', () => {
+    const decimal = run([...digits('20.03'), 'inch', 'conv', 'pitch']);
+    expect(run(['on', 'conv', 'pitch'], decimal).display).toMatchObject({
+      label: 'RAD', valueText: '20.03', unitText: 'INCH',
+    });
+
+    const fraction = run(['2', '0', 'inch', '1', 'fraction', '6', '4', 'conv', 'pitch']);
+    expect(run(['on', 'conv', 'pitch'], fraction).display).toMatchObject({
+      label: 'RAD', valueText: '20 1/64', unitText: 'INCH',
+    });
+  });
+
+  it('does not attach an entered Radius source to a calculated Circle diameter', () => {
+    const radius = run([...digits('20.03'), 'inch', 'conv', 'pitch']);
+    const diameter = run(['circ'], radius);
+    expect(diameter.display).toMatchObject({ label: 'DIA', valueText: '40.06', unitText: 'INCH' });
+    expect(diameter.current?.source).toBeUndefined();
+
+    const stored = run(['equals', 'conv', '1'], diameter);
+    const recalled = run(['on', 'recall', '1'], stored);
+    expect(recalled.display).toMatchObject({ label: 'M-1 STORED', valueText: '40.06', unitText: 'INCH' });
+    expect(recalled.current?.source).toBeUndefined();
+  });
+
+  it('keeps stored Radius authoritative for Arc and preserves only matching segment sources', () => {
+    const state = run([
+      '2', '0', 'inch', 'conv', 'pitch',
+      ...digits('10.03'), 'inch', 'run',
+      ...digits('2.03'), 'inch', 'rise',
+      'conv', 'circ',
+    ]);
+    const chord = advanceToLabel(state, 'circ', 'CORD');
+    const rise = advanceToLabel(state, 'circ', 'RISE');
+
+    expect(state.circle.radius).toBe(20);
+    expect(chord.current?.amount).toBeCloseTo(2 * Math.sqrt(2.03 * (40 - 2.03)), 10);
+    expect(chord.current?.source).toBeUndefined();
+    expect(rise.display.valueText).toBe('2.03');
+    expect(rise.current?.source?.entryText).toBe('2.03');
+  });
+
+  it('keeps direct decimal and fractional Chord/Rise entries exact after deriving Radius', () => {
+    const decimal = run([
+      ...digits('10.03'), 'inch', 'run',
+      ...digits('2.03'), 'inch', 'rise',
+      'conv', 'pitch', 'conv', 'circ',
+    ]);
+    expect(advanceToLabel(decimal, 'circ', 'CORD').display.valueText).toBe('10.03');
+    expect(advanceToLabel(decimal, 'circ', 'RISE').display.valueText).toBe('2.03');
+
+    const fraction = run([
+      '1', '0', 'inch', '3', 'fraction', '6', '4', 'run',
+      '2', 'inch', '1', 'fraction', '6', '4', 'rise',
+      'conv', 'pitch', 'conv', 'circ',
+    ]);
+    expect(advanceToLabel(fraction, 'circ', 'CORD').display.valueText).toBe('10 3/64');
+    expect(advanceToLabel(fraction, 'circ', 'RISE').display.valueText).toBe('2 1/64');
+  });
+
+  it('keeps exact decimal dimensional preferences in live cycles and persistence', () => {
+    let stairs = run(['1', '0', 'feet', 'rise', '1', '2', 'feet', 'run', 'stair']);
+    for (const [key, value] of [
+      ['desiredRiser', 7.03],
+      ['treadWidth', 10.03],
+      ['headroom', 80.03],
+      ['floorThickness', 11.03],
+    ] as const) {
+      stairs = calculatorReducer(stairs, { type: 'set-preference', key, value });
+    }
+
+    expect(advanceToLabel(stairs, 'stair', 'R-HT STORED').display.valueText).toBe('7.03');
+    expect(advanceToLabel(stairs, 'stair', 'T-WD STORED').display.valueText).toBe('10.03');
+    expect(advanceToLabel(stairs, 'stair', 'HDRM STORED').display.valueText).toBe('80.03');
+    expect(advanceToLabel(stairs, 'stair', 'FLOR STORED').display.valueText).toBe('11.03');
+
+    const hydrated = calculatorReducer(initialCalculatorState(), {
+      type: 'hydrate',
+      payload: persistedState(stairs),
+    });
+    const rebuilt = run(['1', '0', 'feet', 'rise', '1', '2', 'feet', 'run', 'stair'], hydrated);
+    expect(advanceToLabel(rebuilt, 'stair', 'R-HT STORED').display.valueText).toBe('7.03');
+    expect(advanceToLabel(rebuilt, 'stair', 'T-WD STORED').display.valueText).toBe('10.03');
+    expect(advanceToLabel(rebuilt, 'stair', 'HDRM STORED').display.valueText).toBe('80.03');
+    expect(advanceToLabel(rebuilt, 'stair', 'FLOR STORED').display.valueText).toBe('11.03');
+
+    const spaced = calculatorReducer(hydrated, {
+      type: 'set-preference', key: 'onCenter', value: 15.03,
+    });
+    const arc = run([
+      '2', '0', 'inch', 'conv', 'pitch',
+      '6', '0', 'conv', 'circ',
+    ], spaced);
+    expect(advanceToLabel(arc, 'circ', 'OC').display.valueText).toBe('15.03');
+  });
+
+  it('preserves decimal settings through recall and repeated storage', () => {
+    const pitch = run([...digits('7.03'), 'inch', 'pitch']);
+    const pitchRestored = run(['on', 'recall', 'pitch', 'pitch', 'on', 'recall', 'pitch'], pitch);
+    expect(pitchRestored.display.valueText).toBe('7.03');
+
+    const irregular = run([...digits('8.03'), 'inch', 'conv', 'hip']);
+    const irregularRestored = run([
+      'on', 'recall', 'conv', 'hip', 'conv', 'hip',
+      'on', 'recall', 'conv', 'hip',
+    ], irregular);
+    expect(irregularRestored.display.valueText).toBe('8.03');
+
+    const jack = run([...digits('15.03'), 'inch', 'jack']);
+    const jackRestored = run(['on', 'recall', 'jack', 'jack', 'on', 'recall', 'jack'], jack);
+    expect(jackRestored.display.valueText).toBe('15.03');
+
+    const riser = run([...digits('7.03'), 'inch', 'conv', 'stair']);
+    const riserRestored = run([
+      'on', 'recall', 'stair', 'conv', 'stair',
+      'on', 'recall', 'stair',
+    ], riser);
+    expect(riserRestored.display.valueText).toBe('7.03');
+  });
+
+  it('updates standalone stored-setting screens immediately when settings change or reset', () => {
+    const storedJack = run([...digits('15.03'), 'inch', 'jack']);
+    const changedJack = calculatorReducer(storedJack, {
+      type: 'set-preference', key: 'onCenter', value: 18,
+    });
+    expect(changedJack.display).toMatchObject({ label: 'JKOC STORED', valueText: '18' });
+    const resetJack = calculatorReducer(changedJack, { type: 'reset-preferences' });
+    expect(resetJack.display).toMatchObject({ label: 'JKOC STORED', valueText: '16' });
+
+    const storedRiser = run([...digits('7.03'), 'inch', 'conv', 'stair']);
+    const changedRiser = calculatorReducer(storedRiser, {
+      type: 'set-preference', key: 'desiredRiser', value: 8,
+    });
+    expect(changedRiser.display).toMatchObject({ label: 'R-HT STORED', valueText: '8' });
+    const resetRiser = calculatorReducer(changedRiser, { type: 'reset-preferences' });
+    expect(resetRiser.display).toMatchObject({ label: 'R-HT STORED', valueText: '7.5' });
+  });
+
+  it('keeps the same semantic result visible when a preference rebuilds a cycle', () => {
+    const jack = advanceToLabel(run([
+      '7', 'inch', 'pitch',
+      '8', 'feet', 'run',
+      'jack',
+    ]), 'jack', 'PLMB');
+    const plumb = jack.current?.amount;
+
+    const refreshed = calculatorReducer(jack, {
+      type: 'set-preference', key: 'onCenter', value: 8,
+    });
+    expect(refreshed.display.label).toBe('PLMB');
+    expect(refreshed.current?.amount).toBeCloseTo(plumb!, 10);
+  });
+
+  it('retains sequence input provenance when display preferences rebuild a cycle', () => {
+    const stairs = run([
+      '1', '0', '8', 'inch', '1', 'fraction', '3', '2', 'run',
+      '9', '6', 'inch', '1', 'fraction', '6', '4', 'rise',
+      'stair',
+    ]);
+    const refreshed = calculatorReducer(stairs, {
+      type: 'set-preference',
+      key: 'fractionDenominator',
+      value: 2,
+    });
+    const runResult = refreshed.sequence?.results.find((result) => result.label === 'RUN (X) STORED');
+    const riseResult = refreshed.sequence?.results.find((result) => result.label === 'RISE (Y) STORED');
+    expect(runResult?.value.fractionDenominator).toBe(32);
+    expect(riseResult?.value.fractionDenominator).toBe(64);
+  });
+
+  it('rejects a sub-resolution stair setting before non-finite geometry reaches the display', () => {
+    const tinyRiser = run([...digits('0.03'), 'inch', 'conv', 'stair']);
+    const state = run(['1', '0', 'feet', 'rise', '1', '2', 'feet', 'run', 'stair'], tinyRiser);
+    expect(state.display).toMatchObject({ label: 'ERROR', valueText: 'DIM Error' });
+    expect(state.sequence).toBeUndefined();
   });
 
   it('advances converted result cycles with the original primary key', () => {
@@ -1416,6 +1809,39 @@ describe('physical keypad workflow', () => {
     expect(sine.current?.amount).toBeCloseTo(0.5, 10);
     const velocity = run(['0', 'decimal', '0', '4', '9', 'conv', '0']);
     expect(velocity.current).toMatchObject({ power: 0 });
+  });
+
+  it('keeps an exact tiny fractional diameter visible in the Circle cycle', () => {
+    const diameter = run(['1', 'fraction', '6', '4', 'circ']);
+    const circumference = run(['circ'], diameter);
+    const diameterAgain = run(['circ', 'circ'], circumference);
+
+    expect(diameter.current).toMatchObject({
+      amount: 1 / 64,
+      power: 1,
+      fractionDenominator: 64,
+    });
+    expect(diameter.display).toMatchObject({ valueText: '0 1/64', unitText: 'INCH' });
+    expect(diameterAgain.display).toMatchObject({ valueText: '0 1/64', unitText: 'INCH' });
+
+    const recalledAfterClear = run(['on', 'circ'], diameter);
+    expect(recalledAfterClear.display).toMatchObject({ valueText: '0 1/64', unitText: 'INCH' });
+  });
+
+  it('lets a newer Run and Rise pair replace an older explicit Arc generation', () => {
+    const state = run([
+      '1', '0', 'feet', 'conv', 'pitch',
+      '6', '0', 'conv', 'circ',
+      '6', 'feet', 'run',
+      '2', 'feet', 'rise',
+      'conv', 'pitch',
+      'conv', 'circ',
+    ]);
+
+    expect(state.display).toMatchObject({ label: 'ARC', unitText: 'DEG' });
+    expect(state.current?.amount).toBeCloseTo(134.76027, 5);
+    expect(state.circle.arcLength).toBeUndefined();
+    expect(state.arcInput).toBeUndefined();
   });
 
   it('derives the documented Arc cycle from segment radius, chord, and rise', () => {

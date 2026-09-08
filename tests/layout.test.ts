@@ -9,7 +9,7 @@ import PhysicalCalculator, { PHYSICAL_KEY_ROWS } from '../components/calculator/
 import { expressionSizeClass } from '../components/calculator/CalculatorDisplay';
 import CalculatorKeypad, { accessibleKeyLabel } from '../components/calculator/CalculatorKeypad';
 import { splitExpressionText } from '../components/calculator/ExpressionText';
-import { initialCalculatorState } from '../lib/calculator/engine';
+import { type KeyId, calculatorReducer, initialCalculatorState } from '../lib/calculator/engine';
 
 const keyboardTarget = (
   kind: 'background' | 'button' | 'input',
@@ -77,6 +77,26 @@ describe('physical HVAC keypad layout', () => {
     expect(markup).toContain('display-guidance');
     expect(markup).not.toContain('PROFESSIONAL HVAC CALCULATOR');
     expect(markup).not.toContain('Sheet metal · Construction math');
+  });
+
+  it('renders the live triangle drawing inside the shared display without hiding the keypad', () => {
+    const keys: KeyId[] = ['8', 'feet', 'run', '6', 'feet', 'rise', 'diag'];
+    const triangleState = keys.reduce(
+      (state, key) => calculatorReducer(state, { type: 'press', key }),
+      initialCalculatorState(),
+    );
+    const markup = renderToStaticMarkup(createElement(PhysicalCalculator, {
+      active: true,
+      state: triangleState,
+      onPress: () => undefined,
+      onFactoryReset: () => undefined,
+    }));
+
+    expect(markup).toContain('data-diagram-kind="right-triangle"');
+    expect(markup).toContain('data-metric="x"');
+    expect(markup).toContain('diagram-status-entered');
+    expect(markup).toContain('diagram-status-calculated');
+    expect(markup).toContain('physical-keypad');
   });
 
   it('disables ordinary controls while Off and exposes the factory-reset chord', () => {

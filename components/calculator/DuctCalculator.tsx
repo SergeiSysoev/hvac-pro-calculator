@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   DuctField,
   DuctUnitSystem,
+  MIN_RECTANGULAR_EQUIVALENT_REYNOLDS,
   displayToImperialValue,
   ductEntryCommaMode,
   ductFlowRegimeNotice,
@@ -14,6 +15,7 @@ import {
   rectangularEquivalents,
   solveRoundDuct,
 } from '@/lib/calculator/duct';
+import DuctFlowDiagram from './DuctFlowDiagram';
 
 const STORAGE_KEY = 'hvac-pro-duct-state-v1';
 const DUCT_ERROR_ID = 'duct-input-error';
@@ -45,7 +47,14 @@ function formatNumber(value: number, maximumFractionDigits = 3): string {
   }).format(value);
 }
 
-function formatInput(value: number): string {
+export function formatInput(value: number): string {
+  const magnitude = Math.abs(value);
+  if (magnitude > 0 && magnitude < 0.0001) {
+    return value
+      .toExponential(3)
+      .replace(/\.0+(?=e)/, '')
+      .replace(/(\.\d*?)0+(?=e)/, '$1');
+  }
   const digits = Math.abs(value) >= 100 ? 1 : Math.abs(value) >= 10 ? 2 : 4;
   return Number(value.toFixed(digits)).toString();
 }
@@ -248,6 +257,14 @@ export default function DuctCalculator() {
         <span className="visually-hidden" role="status" aria-live="polite">{ductStatusText}</span>
       </div>
 
+      <DuctFlowDiagram
+        manualOrder={manualOrder}
+        rawValues={rawValues}
+        solution={result.solution}
+        unitSystem={unitSystem}
+        error={result.error}
+      />
+
       <button type="button" className="clear-duct" onClick={clearAll}>Clear all</button>
 
       <div className="equivalent-card">
@@ -282,7 +299,9 @@ export default function DuctCalculator() {
           </div>
         ) : (
           <p className="equivalent-empty">{result.solution
-            ? 'No built-in standard size is within ±10% of the target friction rate.'
+            ? result.solution.reynolds < MIN_RECTANGULAR_EQUIVALENT_REYNOLDS
+              ? 'Rectangular equivalents are withheld for laminar or transitional flow. Verify this low-flow application manually.'
+              : 'No built-in standard size is within ±10% of the target friction rate.'
             : 'Solve a round duct to see standard rectangular options.'}</p>
         )}
       </div>
