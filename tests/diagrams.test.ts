@@ -1362,13 +1362,223 @@ describe('calculation diagrams', () => {
     expect(metric(fan, 'b-new')).toMatchObject({ status: 'calculated', active: true });
   });
 
-  it('does not decorate ordinary arithmetic, unary math, preferences, or VP/FPM', () => {
+  it('does not decorate ordinary arithmetic, preferences, or unit entry', () => {
     expect(calculatorDiagramView(initialCalculatorState())).toBeUndefined();
     expect(calculatorDiagramView(run(['2', 'add', '3', 'equals']))).toBeUndefined();
-    expect(calculatorDiagramView(run(['9', 'sqrt']))).toBeUndefined();
     expect(calculatorDiagramView(run(['conv', 'equals']))).toBeUndefined();
-    expect(calculatorDiagramView(run(['0', 'decimal', '0', '4', '9', 'conv', '0'])))
-      .toBeUndefined();
+    expect(calculatorDiagramView(run(['5', 'feet']))).toBeUndefined();
+    expect(calculatorDiagramView(run(['5', '0', 'conv', 'add']))).toBeUndefined();
+    expect(calculatorDiagramView(run(['4', 'conv', 'divide']))).toBeUndefined();
+  });
+
+  it('draws the right triangle behind each trigonometric function', () => {
+    // The entered angle solves a ratio; the drawing highlights the two sides
+    // that ratio is made of.
+    const cases: Array<{ keys: KeyId[]; label: string; pair: string }> = [
+      { keys: ['3', '0', 'sin'], label: 'SIN', pair: 'opp-hyp' },
+      { keys: ['3', '0', 'cos'], label: 'COS', pair: 'adj-hyp' },
+      { keys: ['3', '0', 'tan'], label: 'TAN', pair: 'opp-adj' },
+    ];
+    for (const sample of cases) {
+      const state = run(sample.keys);
+      const view = calculatorDiagramView(state)!;
+      expect(state.display.label, sample.label).toBe(sample.label);
+      expect(view).toMatchObject({ kind: 'trig', variant: sample.pair });
+      expect(view.geometry?.theta).toBeCloseTo(30, 10);
+      expect(metric(view, 'theta')).toMatchObject({ status: 'entered', active: false });
+      expect(metric(view, 'ratio')).toMatchObject({ status: 'calculated', active: true });
+      expect(metric(view, 'ratio').value).toBe(readableMeasurement(state.display.plainText));
+    }
+  });
+
+  it('reverses entered and calculated for the arc functions', () => {
+    const state = run(['decimal', '5', 'conv', 'sin']);
+    const view = calculatorDiagramView(state)!;
+
+    expect(state.display.label).toBe('ASIN');
+    expect(view).toMatchObject({ kind: 'trig', variant: 'opp-hyp' });
+    // The ratio was typed, the angle came out of it.
+    expect(metric(view, 'ratio')).toMatchObject({ status: 'entered', active: false });
+    expect(metric(view, 'theta')).toMatchObject({ status: 'calculated', active: true });
+    expect(view.geometry?.theta).toBeCloseTo(30, 6);
+    expect(metric(view, 'theta').value).toBe(readableMeasurement(state.display.plainText));
+  });
+
+  it('highlights only the sides the ratio is made of', () => {
+    const sides = (keys: KeyId[]) => {
+      const markup = renderToStaticMarkup(createElement(CalculatorDiagram, {
+        view: calculatorDiagramView(run(keys))!,
+      }));
+      return ['adjacent', 'opposite', 'hypotenuse'].filter((name) => (
+        new RegExp(`data-trig-side="${name}" class="diagram-line`).test(markup)
+      ));
+    };
+    expect(sides(['3', '0', 'sin'])).toEqual(['opposite', 'hypotenuse']);
+    expect(sides(['3', '0', 'cos'])).toEqual(['adjacent', 'hypotenuse']);
+    expect(sides(['3', '0', 'tan'])).toEqual(['adjacent', 'opposite']);
+  });
+
+  it('draws a square or cube for the power and root keys', () => {
+    const square = calculatorDiagramView(run(['4', 'square']))!;
+    expect(square).toMatchObject({ kind: 'power', variant: 'square' });
+    expect(metric(square, 'side')).toMatchObject({ status: 'entered', value: '4' });
+    expect(metric(square, 'area')).toMatchObject({ status: 'calculated', active: true });
+
+    // A root enters the area and solves the side, so the marks swap.
+    const root = calculatorDiagramView(run(['9', 'sqrt']))!;
+    expect(root).toMatchObject({ kind: 'power', variant: 'square' });
+    expect(metric(root, 'area')).toMatchObject({ status: 'entered', value: '9' });
+    expect(metric(root, 'side')).toMatchObject({ status: 'calculated', active: true, value: '3' });
+
+    const cube = calculatorDiagramView(run(['3', 'conv', 'square']))!;
+    expect(cube).toMatchObject({ kind: 'power', variant: 'cube' });
+    expect(metric(cube, 'volume')).toMatchObject({ status: 'calculated', active: true });
+
+    const cubeRoot = calculatorDiagramView(run(['2', '7', 'conv', 'sqrt']))!;
+    expect(cubeRoot).toMatchObject({ kind: 'power', variant: 'cube' });
+    expect(metric(cubeRoot, 'side')).toMatchObject({ status: 'calculated', active: true, value: '3' });
+  });
+
+  it('never draws a figure over a live arithmetic expression', () => {
+    // Mid-expression the number on screen belongs to the arithmetic, and the
+    // written expression holds the OTHER operand - drawing from it invented a
+    // triangle at 2 degrees for "2 + 30 SIN".
+    const inExpression: KeyId[][] = [
+      ['2', 'add', '3', '0', 'sin'],
+      ['2', 'add', '3', 'sqrt'],
+      ['5', 'multiply', '4', 'square'],
+      ['left', '2', 'add', '3', 'right', 'sqrt'],
+      ['2', 'add', '3', 'equals', 'square'],
+      ['0', 'subtract', '3', '0', 'equals', 'sin'],
+    ];
+    for (const keys of inExpression) {
+      expect(calculatorDiagramView(run(keys)), keys.join(' ')).toBeUndefined();
+    }
+  });
+
+  it('uses the argument the unary key actually consumed, not the written one', () => {
+    // A second unary leaves the first one's argument in the expression, which
+    // is why the square after a root claimed a side of 9 for an area of 9.
+    const chained = calculatorDiagramView(run(['9', 'sqrt', 'square']))!;
+    expect(metric(chained, 'side').value).toBe('3');
+    expect(metric(chained, 'area').value).toBe('9');
+
+    const twice = calculatorDiagramView(run(['1', '6', 'sqrt', 'sqrt']))!;
+    expect(metric(twice, 'area').value).toBe('4');
+    expect(metric(twice, 'side').value).toBe('2');
+
+    const afterSine = calculatorDiagramView(run(['3', '0', 'sin', 'square']))!;
+    expect(metric(afterSine, 'side').value).toBe('0.5');
+
+    // A dimensional square keeps its own units on both rows.
+    const dimensional = calculatorDiagramView(run(['4', 'feet', 'square']))!;
+    expect(metric(dimensional, 'side').value).toBe('4′');
+    expect(metric(dimensional, 'area').value).toContain('ft²');
+  });
+
+  it('separates a calculated argument from a typed, stored or recalled one', () => {
+    const typed = calculatorDiagramView(run(['9', 'sqrt']))!;
+    expect(metric(typed, 'area')).toMatchObject({ status: 'entered' });
+
+    // "Entered or stored": a recalled number and a constant are the operator's
+    // own, exactly as the triangle treats a recalled pitch one key press earlier.
+    const recalled = calculatorDiagramView(run([
+      '6', 'inch', 'pitch', 'on', 'recall', 'pitch', 'square',
+    ]))!;
+    expect(metric(recalled, 'side')).toMatchObject({ status: 'entered' });
+    const constant = calculatorDiagramView(run(['pi', 'square']))!;
+    expect(metric(constant, 'side')).toMatchObject({ status: 'entered' });
+
+    // A metric conversion restates a number without authoring it: a velocity
+    // the calculator solved stays calculated after Conv + Meter.
+    const converted = calculatorDiagramView(run([
+      '0', 'decimal', '0', '4', '9', 'conv', '0', 'conv', 'meter', 'square',
+    ]))!;
+    expect(metric(converted, 'side')).toMatchObject({ status: 'calculated' });
+    // ... while a typed dimension keeps its origin through the same conversion.
+    const typedFeet = calculatorDiagramView(run(['4', 'feet', 'square']))!;
+    expect(metric(typedFeet, 'side')).toMatchObject({ status: 'entered' });
+
+    // Both figures answer the same question the same way for the same number.
+    const constantAngle = calculatorDiagramView(run(['pi', 'conv', 'decimal']))!;
+    expect(metric(constantAngle, 'source')).toMatchObject({ status: 'entered' });
+
+    // The same figure, but the 9 came out of an earlier calculation.
+    const computed = calculatorDiagramView(run(['3', 'square', 'sqrt']))!;
+    expect(metric(computed, 'area')).toMatchObject({ status: 'calculated' });
+
+    const recalledAngle = calculatorDiagramView(run(['3', '0', 'sin', 'square']))!;
+    expect(metric(recalledAngle, 'side')).toMatchObject({ status: 'calculated' });
+  });
+
+  it('drops a stale unit meaning when a number is reused as an angle', () => {
+    // 886.5445 was a velocity a moment ago; Sine reads it as degrees, and the
+    // drawing must say degrees rather than reprinting FPM.
+    const state = run(['0', 'decimal', '0', '4', '9', 'conv', '0', 'sin']);
+    const view = calculatorDiagramView(state)!;
+    expect(view.kind).toBe('trig');
+    expect(metric(view, 'theta').value).toBe('886.5445°');
+    expect(metric(view, 'theta').status).toBe('calculated');
+  });
+
+  it('draws the air stream for the velocity-pressure cycle', () => {
+    let state = run(['0', 'decimal', '0', '4', '9', 'conv', '0']);
+    const view = calculatorDiagramView(state)!;
+
+    expect(state.display.label).toBe('FPM');
+    expect(view.kind).toBe('velocity');
+    // The reading the operator typed stays marked as theirs through the cycle.
+    expect(metric(view, 'entry')).toMatchObject({ status: 'entered', value: '0.049' });
+    expect(metric(view, 'speed')).toMatchObject({ active: true, status: 'calculated' });
+    // The entry is the pressure that produced this velocity, so it belongs in
+    // the pressure row - never paired against the opposite conversion of itself.
+    expect(metric(view, 'pressure')).toMatchObject({ status: 'entered', value: '0.049' });
+
+    const asPressure = run(['conv', '0'], state);
+    const pressureView = calculatorDiagramView(asPressure)!;
+    expect(asPressure.display.label).toBe('VP');
+    expect(metric(pressureView, 'pressure')).toMatchObject({ active: true, status: 'calculated' });
+    expect(metric(pressureView, 'speed')).toMatchObject({ status: 'entered', value: '0.049' });
+
+    const labels: string[] = [];
+    for (let step = 0; step < 4; step += 1) {
+      state = run(['conv', '0'], state);
+      const stepView = calculatorDiagramView(state)!;
+      labels.push(state.display.label.trim());
+      const active = stepView.metrics.filter((item) => item.active);
+      expect(active, state.display.label).toHaveLength(1);
+    }
+    expect(labels).toEqual(['VP', 'MPS', 'KPA', 'ENTRY']);
+    // Back on the operator's own reading, it is entered rather than solved.
+    expect(metric(calculatorDiagramView(state)!, 'entry'))
+      .toMatchObject({ status: 'entered', active: true });
+  });
+
+  it('draws one angle for both notations of the dms conversion', () => {
+    const state = run(['3', '0', 'decimal', '3', '0', 'conv', 'decimal']);
+    const view = calculatorDiagramView(state)!;
+
+    expect(state.display.label).toBe('DMS');
+    expect(view).toMatchObject({ kind: 'angle', variant: 'dms' });
+    expect(view.geometry?.theta).toBeCloseTo(30.3, 10);
+    expect(metric(view, 'shown')).toMatchObject({ active: true, value: '30.18.00' });
+    expect(metric(view, 'source')).toMatchObject({ status: 'entered', value: '30.3°' });
+
+    // The other direction: a DMS source is kept verbatim, because formatting it
+    // would print the decimal notation already on screen.
+    const back = run(['3', '0', 'decimal', '1', '8', 'decimal', '0', '0', 'conv', 'decimal']);
+    const backView = calculatorDiagramView(back)!;
+    expect(back.display.label).toBe('DEG');
+    expect(metric(backView, 'shown').value).toBe('30.3°');
+    expect(metric(backView, 'source').value).toBe('30.18.00');
+
+    // A computed angle still shows both notations; only its provenance differs.
+    const computed = calculatorDiagramView(run([
+      '3', 'run', '4', 'rise', 'diag', 'diag', 'conv', 'decimal',
+    ]))!;
+    expect(metric(computed, 'source')).toMatchObject({ status: 'calculated', value: '53.1301°' });
+    const computedMarkup = renderToStaticMarkup(createElement(CalculatorDiagram, { view: computed }));
+    expect(computedMarkup).toContain('53.1301°');
   });
 
   it('shows the exact current value at every mapped special-function cycle step', () => {

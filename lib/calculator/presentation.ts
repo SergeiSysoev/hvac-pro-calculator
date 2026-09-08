@@ -1,7 +1,7 @@
 import { formatValue } from './core';
 import type { CalcValue, Operator, Preferences } from './core';
 import { solveRightTriangle } from './formulas';
-import { displayOperandText, semanticValueSuffix } from './engine';
+import { displayOperandText, provenanceIsOperandOwn, semanticValueSuffix } from './engine';
 import type {
   CalculatorState,
   DisplayDraftSnapshot,
@@ -39,7 +39,11 @@ export type CalculatorDiagramKind =
   | 'roof'
   | 'stairs'
   | 'solids'
-  | 'fan-law';
+  | 'fan-law'
+  | 'trig'
+  | 'power'
+  | 'velocity'
+  | 'angle';
 
 export type CalculatorDiagramStatus = 'entered' | 'expected' | 'calculated';
 
@@ -2383,6 +2387,210 @@ function hasValidStagedOffset(state: CalculatorState): boolean {
   return centerlineRadius - endA.amount / 2 >= 0;
 }
 
+/**
+ * Air velocity and the pressure it produces. The two readings are opposite
+ * directions of one conversion, so only the reading actually on screen is shown
+ * as a result, and the operator's own number is shown in the role it plays:
+ * the pressure behind a velocity, or the velocity behind a pressure.
+ */
+function velocityDiagram(state: CalculatorState): CalculatorDiagramView | undefined {
+  const label = state.display.label.trim();
+  const entry = sequenceResultValue(state, 'ENTRY');
+  if (!entry) return undefined;
+  const shown = state.sequence && sequenceIsDisplayed(state) && state.sequence.index >= 0
+    ? state.sequence.results[state.sequence.index]?.value
+    : undefined;
+  const showsSpeed = label === 'FPM' || label === 'MPS';
+  const showsPressure = label === 'VP' || label === 'KPA';
+  const si = label === 'MPS' || label === 'KPA';
+  return finishDiagram(state, {
+    kind: 'velocity',
+    variant: si ? 'si' : 'imperial',
+    title: 'Air stream · Velocity and the velocity pressure it produces',
+    metrics: [
+      diagramMetric(
+        'speed', si ? 'MPS' : 'FPM',
+        si ? 'Velocity in metres per second' : 'Velocity in feet per minute',
+        showsSpeed ? diagramValue(shown, state)
+          : showsPressure ? diagramValue(entry, state)
+            : undefined,
+        showsPressure, showsSpeed, 'after solve',
+      ),
+      diagramMetric(
+        'pressure', si ? 'KPA' : 'VP',
+        si ? 'Velocity pressure in pascals' : 'Velocity pressure in inches w.g.',
+        showsPressure ? diagramValue(shown, state)
+          : showsSpeed ? diagramValue(entry, state)
+            : undefined,
+        showsSpeed, showsPressure, 'after solve',
+      ),
+      diagramMetric(
+        'entry', 'ENT', 'Entered reading',
+        diagramValue(entry, state),
+        true, label === 'ENTRY', 'enter a reading',
+      ),
+    ],
+  });
+}
+
+/**
+ * The same angle written two ways. The converted notation is on screen; the
+ * notation it came from is taken verbatim from the transformation, because
+ * re-formatting the number would print the same notation twice.
+ */
+function angleNotationDiagram(state: CalculatorState): CalculatorDiagramView | undefined {
+  const shown = state.current;
+  const source = state.transformationSource;
+  // While a two-dot number is still being typed the label already reads DMS,
+  // and nothing has been converted yet.
+  if (!shown || !Number.isFinite(shown.amount) || state.entry) return undefined;
+  if (!source?.committedText) return undefined;
+  const asDms = state.display.label.trim() === 'DMS';
+  const sourceEntered = provenanceIsOperandOwn(source.metadata?.provenance);
+  return finishDiagram(state, {
+    kind: 'angle',
+    variant: asDms ? 'dms' : 'decimal',
+    title: 'Angle · Degrees-minutes-seconds and decimal degrees',
+    geometry: { theta: Math.abs(shown.amount) % 180 },
+    metrics: [
+      diagramMetric(
+        'shown', asDms ? 'DMS' : 'DEG',
+        asDms ? 'Degrees, minutes, seconds' : 'Decimal degrees',
+        readableMeasurement(state.display.plainText),
+        false, true, 'after conversion',
+      ),
+      diagramMetric(
+        'source', asDms ? 'DEG' : 'DMS',
+        asDms ? 'Decimal degrees' : 'Degrees, minutes, seconds',
+        // A DMS source is kept verbatim, because re-formatting it would print
+        // the notation already on screen. A decimal source has to be formatted:
+        // its raw entry text ("30.30") is this calculator's own DMS grammar and
+        // would read as the very notation this row exists to tell apart.
+        asDms && source.current
+          ? diagramValue({ ...source.current, angle: true }, state)
+          : readableMeasurement(source.committedText),
+        sourceEntered, false, 'the angle converted',
+      ),
+    ],
+  });
+}
+
+const TRIG_FORMS: Record<string, { title: string; ratio: string; pair: string }> = {
+  SIN: { title: 'Sine', ratio: 'Opposite ÷ Hypotenuse', pair: 'opp-hyp' },
+  COS: { title: 'Cosine', ratio: 'Adjacent ÷ Hypotenuse', pair: 'adj-hyp' },
+  TAN: { title: 'Tangent', ratio: 'Opposite ÷ Adjacent', pair: 'opp-adj' },
+  ASIN: { title: 'Arcsine', ratio: 'Opposite ÷ Hypotenuse', pair: 'opp-hyp' },
+  ACOS: { title: 'Arccosine', ratio: 'Adjacent ÷ Hypotenuse', pair: 'adj-hyp' },
+  ATAN: { title: 'Arctangent', ratio: 'Opposite ÷ Adjacent', pair: 'opp-adj' },
+};
+
+const POWER_FORMS: Record<string, 'square' | 'cube' | 'sqrt' | 'cuberoot'> = {
+  'x²': 'square',
+  'x³': 'cube',
+  '√x': 'sqrt',
+  '³√x': 'cuberoot',
+};
+
+/**
+ * Trigonometry drawn as the triangle it describes, at the angle actually on
+ * screen, with the two sides that form the ratio highlighted. The direct
+ * functions enter an angle and solve a ratio; the arc functions do the reverse.
+ */
+function trigDiagram(
+  state: CalculatorState,
+  input: NonNullable<CalculatorState['unaryInput']>,
+): CalculatorDiagramView | undefined {
+  const form = TRIG_FORMS[input.mode];
+  if (!form) return undefined;
+  const inverse = input.mode.startsWith('A');
+  // Trigonometry reads its argument as a plain angle or ratio, so any earlier
+  // meaning the number carried (FPM, percent grade) is deliberately dropped -
+  // keeping it would print a velocity in the angle row.
+  const bare = (value: CalcValue, angle: boolean): CalcValue => ({
+    ...value, angle, semanticKind: undefined,
+  });
+  const angleValue = inverse ? state.current : input.value;
+  const ratioValue = inverse ? input.value : state.current;
+  if (!angleValue || !Number.isFinite(angleValue.amount)) return undefined;
+  return finishDiagram(state, {
+    kind: 'trig',
+    variant: form.pair,
+    title: `${form.title} · ${form.ratio} of a right triangle`,
+    geometry: { theta: angleValue.amount },
+    metrics: [
+      diagramMetric(
+        'theta', 'θ', 'Angle',
+        diagramValue(bare(angleValue, true), state),
+        !inverse && input.entered, inverse, 'enter an angle',
+      ),
+      diagramMetric(
+        'ratio', input.mode.replace(/^A/, ''), form.ratio,
+        ratioValue ? diagramValue(bare(ratioValue, false), state) : undefined,
+        inverse && input.entered, !inverse, 'enter a ratio',
+      ),
+    ],
+  });
+}
+
+/**
+ * Square and cube work: the side and the area or volume of one figure, with the
+ * operator's own number marked and the solved one following from it.
+ */
+function powerDiagram(
+  state: CalculatorState,
+  input: NonNullable<CalculatorState['unaryInput']>,
+): CalculatorDiagramView | undefined {
+  const mode = POWER_FORMS[input.mode];
+  if (!mode) return undefined;
+  const cubic = mode === 'cube' || mode === 'cuberoot';
+  const solvesSide = mode === 'sqrt' || mode === 'cuberoot';
+  const side = solvesSide ? state.current : input.value;
+  const measure = solvesSide ? input.value : state.current;
+  if (!side || !measure) return undefined;
+  return finishDiagram(state, {
+    kind: 'power',
+    variant: cubic ? 'cube' : 'square',
+    title: cubic ? 'Cube · Side and volume' : 'Square · Side and area',
+    metrics: [
+      diagramMetric(
+        'side', 's', 'Side', diagramValue(side, state),
+        !solvesSide && input.entered, solvesSide, 'enter a side',
+      ),
+      diagramMetric(
+        cubic ? 'volume' : 'area',
+        cubic ? 'V' : 'A',
+        cubic ? 'Volume' : 'Area',
+        diagramValue(measure, state),
+        solvesSide && input.entered, !solvesSide, cubic ? 'enter a volume' : 'enter an area',
+      ),
+    ],
+  });
+}
+
+/**
+ * Drawings for the single-value functions. They are shown only when the result
+ * is the whole of what is on screen: inside an arithmetic expression the number
+ * belongs to the arithmetic, not to a figure.
+ */
+function unaryDiagram(state: CalculatorState): CalculatorDiagramView | undefined {
+  const input = state.unaryInput;
+  // The record survives in state, so it counts only while its own result is the
+  // one on screen. Any other key puts a different label up and retires it.
+  if (!input || state.display.label.trim() !== input.mode) return undefined;
+  const insideExpression = Boolean(
+    state.expression.length
+    || state.parenthesisDepth
+    || state.completedExpression.length
+    // Only an operator means arithmetic. A dimensional square writes itself as
+    // "(4')2", so its grouping brackets are part of the function, not a sum.
+    || state.displayExpression.some((item) => item.type === 'operator'),
+  );
+  if (insideExpression) return undefined;
+  return TRIG_FORMS[input.mode]
+    ? trigDiagram(state, input)
+    : powerDiagram(state, input);
+}
+
 export function calculatorDiagramView(state: CalculatorState): CalculatorDiagramView | undefined {
   if (
     !state.powered
@@ -2406,6 +2614,15 @@ export function calculatorDiagramView(state: CalculatorState): CalculatorDiagram
       || token.type === 'postfix'
     )),
   );
+  // Unary math is not "ordinary arithmetic": squaring a side or taking a sine
+  // describes a figure, and the figure is what makes the result readable.
+  const unary = unaryDiagram(state);
+  if (unary) return unary;
+  const angleLabel = state.display.label.trim();
+  if ((angleLabel === 'DMS' || angleLabel === 'DEG') && !hasOrdinaryMath) {
+    const notation = angleNotationDiagram(state);
+    if (notation) return notation;
+  }
   if (hasOrdinaryMath) return undefined;
 
   const sequenceId = state.sequence && sequenceIsDisplayed(state)
@@ -2423,6 +2640,7 @@ export function calculatorDiagramView(state: CalculatorState): CalculatorDiagram
   }
   if (sequenceId === 'stairs') return stairDiagram(state);
   if (sequenceId === 'column-cone') return solidsDiagram(state);
+  if (sequenceId === 'velocity') return velocityDiagram(state);
 
   const label = state.display.label.trim();
   // Only while the irregular pitch is the value on screen, or while a new one is

@@ -216,6 +216,15 @@ export interface CalculatorState {
   permanentPitchApproximate?: boolean;
   /** Exact representation used to store permanent Pitch (inches, degrees, or grade). */
   permanentPitchInputValue?: CalcValue;
+  /**
+   * The argument the last unary key actually consumed, recorded here because
+   * the written expression cannot be trusted to yield it: mid-expression it
+   * holds the other operand, and after a second unary it still holds the first
+   * one's argument. This record is NOT cleared on the next key press - the
+   * drawing retires it by requiring the display label to still match its mode,
+   * which is what keeps an inert key from changing state identity.
+   */
+  unaryInput?: { mode: string; value: CalcValue; entered: boolean };
   irregularPitchSlope?: number;
   irregularPitchApproximate?: boolean;
   /** Exact representation used to store irregular Pitch. */
@@ -2344,6 +2353,32 @@ function calculateEquals(state: CalculatorState): CalculatorState {
   };
 }
 
+/**
+ * Whether a displayed number came from the operator rather than from the
+ * calculator. Typed, unit-restated, recalled and constant values are all the
+ * operator's own - the drawings call that state "entered or stored", and a
+ * recalled pitch is already marked that way. Anything the calculator worked out
+ * is not. This is an allow-list on purpose: a provenance kind added later must
+ * be classified deliberately rather than defaulting to the operator.
+ *
+ * Exported because the drawings must not keep their own copy of this rule -
+ * two copies is exactly how the angle figure and the square figure came to
+ * disagree about the same number.
+ */
+export function provenanceIsOperandOwn(
+  provenance: DisplayValueProvenance | undefined,
+): boolean {
+  return provenance === 'raw-entry'
+    || provenance === 'unit-source'
+    || provenance === 'constant'
+    || provenance === 'recalled';
+}
+
+function operandWasEntered(state: CalculatorState): boolean {
+  if (state.entry || state.imperialEntryText || state.fractionNumerator !== undefined) return true;
+  return provenanceIsOperandOwn(state.currentDisplayMetadata?.provenance);
+}
+
 function applyUnary(
   state: CalculatorState,
   fn: (value: CalcValue) => CalcValue,
@@ -2355,7 +2390,17 @@ function applyUnary(
   try {
     const value = fn(input.value);
     const shown = showValue(
-      { ...input.state, entry: '', fractionNumerator: undefined, composedInches: undefined },
+      {
+        ...input.state,
+        entry: '',
+        fractionNumerator: undefined,
+        composedInches: undefined,
+        unaryInput: {
+          mode: label,
+          value: cloneValue(input.value),
+          entered: operandWasEntered(state),
+        },
+      },
       value,
       label,
     );
@@ -2411,7 +2456,18 @@ function trig(state: CalculatorState, mode: 'sin' | 'cos' | 'tan' | 'asin' | 'ac
       input.value.approximate
       || (canonicalRoundedResult && !(inverse ? inverseSpecial : directSpecial)),
     ) || undefined;
-    const shown = showValue(input.state, value, mode.toUpperCase());
+    const shown = showValue(
+      {
+        ...input.state,
+        unaryInput: {
+          mode: mode.toUpperCase(),
+          value: cloneValue(input.value),
+          entered: operandWasEntered(state),
+        },
+      },
+      value,
+      mode.toUpperCase(),
+    );
     return preserveSymbolicResult(shown, displayExpression);
   } catch (error) {
     return showError({
@@ -3930,6 +3986,9 @@ function velocity(state: CalculatorState): CalculatorState {
     '0',
     initialIndex,
     Boolean(input.value.approximate),
+    // ENTRY carries the operator's own reading, so the cycle can say which of
+    // the four numbers was typed and which were solved from it.
+    results.findIndex((item) => item.label === 'ENTRY'),
   );
 }
 
@@ -4031,7 +4090,10 @@ function convertCurrentUnit(state: CalculatorState, unit: 'feet' | 'inch' | 'met
       currentDisplayMetadata: {
         provenance: input.state.currentSourceExpression?.length
           ? 'symbolic-expression'
-          : 'unit-source',
+          // A metric conversion restates a number; it does not author one. A
+          // calculated reading stays calculated, or squaring it would claim the
+          // calculator's own answer as the operator's.
+          : input.state.currentDisplayMetadata?.provenance ?? 'unit-source',
         exactness: entered.approximate ? 'approximate' : 'exact',
       },
       inputActive: true,
@@ -4070,7 +4132,10 @@ function convertMetricKey(state: CalculatorState): CalculatorState {
       currentDisplayMetadata: {
         provenance: input.state.currentSourceExpression?.length
           ? 'symbolic-expression'
-          : 'unit-source',
+          // A metric conversion restates a number; it does not author one. A
+          // calculated reading stays calculated, or squaring it would claim the
+          // calculator's own answer as the operator's.
+          : input.state.currentDisplayMetadata?.provenance ?? 'unit-source',
         exactness: entered.approximate ? 'approximate' : 'exact',
       },
       inputActive: true,

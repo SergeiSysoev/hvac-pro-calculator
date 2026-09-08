@@ -37,13 +37,16 @@ function MetricLabel({
   x,
   y,
   anchor = 'middle',
+  always = false,
 }: {
   item: CalculatorDiagramMetric;
   x: number;
   y: number;
   anchor?: 'start' | 'middle' | 'end';
+  /** Show the value even when the element is neither entered nor current. */
+  always?: boolean;
 }) {
-  const detail = item.value && (item.status === 'entered' || item.active)
+  const detail = item.value && (always || item.status === 'entered' || item.active)
     ? item.value
     : item.active
       ? item.placeholder
@@ -581,6 +584,159 @@ function FanLawDiagram({ view }: { view: CalculatorDiagramView }) {
   );
 }
 
+function VelocityDiagram({ view }: { view: CalculatorDiagramView }) {
+  const entry = metric(view, 'entry');
+  const speed = metric(view, 'speed');
+  const pressure = metric(view, 'pressure');
+  return (
+    <svg className="diagram-canvas" viewBox="0 0 180 132" focusable="false">
+      <text className="diagram-column-title" x="90" y="11" textAnchor="middle">AIR STREAM</text>
+      <path className="diagram-reference" d="M16 34 H164 M16 86 H164" />
+      <path
+        data-air="flow"
+        className={`diagram-line ${metricClass(speed)}`}
+        d="M28 68 H128 M116 59 L128 68 L116 77"
+      />
+      <path
+        data-air="pressure"
+        className={`diagram-dimension ${metricClass(pressure)}`}
+        d="M152 44 V78 M147 44 H157 M147 78 H157"
+      />
+      <MetricLabel item={speed} x={74} y={46} />
+      <MetricLabel item={pressure} x={172} y={104} anchor="end" />
+      {/* Off the ENTRY step the reading is already shown in the row whose part
+          it plays, so a second copy would only take a line. */}
+      {entry.active ? <MetricLabel item={entry} x={10} y={104} anchor="start" /> : null}
+    </svg>
+  );
+}
+
+function AngleNotationDiagram({ view }: { view: CalculatorDiagramView }) {
+  const shown = metric(view, 'shown');
+  const source = metric(view, 'source');
+  const raw = view.geometry?.theta ?? 45;
+  const angle = Math.min(88, Math.max(6, raw > 90 ? 180 - raw : raw));
+  const radians = angle * Math.PI / 180;
+  const originX = 30;
+  const originY = 96;
+  // Keep the arm inside the canvas at any opening: a steep angle would run off
+  // the top and cross the title.
+  const arm = Math.min(
+    120,
+    76 / Math.max(0.08, Math.sin(radians)),
+    140 / Math.max(0.08, Math.cos(radians)),
+  );
+  const tipX = rounded(originX + arm * Math.cos(radians));
+  const tipY = rounded(originY - arm * Math.sin(radians));
+  const arc = 30;
+  return (
+    <svg className="diagram-canvas" viewBox="0 0 180 132" focusable="false">
+      <text className="diagram-column-title" x="90" y="11" textAnchor="middle">ANGLE</text>
+      <path className="diagram-reference" d={`M${originX} ${originY} H${originX + arm}`} />
+      <path
+        data-angle="arm"
+        className={`diagram-line ${metricClass(shown)}`}
+        d={`M${originX} ${originY} L${tipX} ${tipY}`}
+      />
+      <path
+        className={`diagram-angle ${metricClass(shown)}`}
+        d={`M${originX + arc} ${originY} A${arc} ${arc} 0 0 0 ${rounded(originX + arc * Math.cos(radians))} ${rounded(originY - arc * Math.sin(radians))}`}
+      />
+      {/* Both rows describe the same opening, so both always carry their
+          number - a blank row would defeat the point of the figure. */}
+      <MetricLabel item={shown} x={originX + 78} y={originY - 30} anchor="start" always />
+      <MetricLabel item={source} x={originX + 40} y={originY + 16} anchor="start" always />
+    </svg>
+  );
+}
+
+function TrigDiagram({ view }: { view: CalculatorDiagramView }) {
+  const theta = metric(view, 'theta');
+  const ratio = metric(view, 'ratio');
+  const pair = view.variant ?? 'opp-hyp';
+  // Draw the triangle at the angle actually on screen, clamped only so that a
+  // near-flat or near-vertical angle still reads as a triangle.
+  const raw = Math.abs(view.geometry?.theta ?? 45) % 180;
+  const angle = Math.min(80, Math.max(10, raw > 90 ? 180 - raw : raw));
+  const originX = 26;
+  const baseY = 100;
+  const adjacent = 112;
+  const opposite = Math.min(74, adjacent * Math.tan(angle * Math.PI / 180));
+  const cornerX = rounded(originX + adjacent);
+  const apexY = rounded(baseY - opposite);
+  const usesOpposite = pair !== 'adj-hyp';
+  const usesAdjacent = pair !== 'opp-hyp';
+  const usesHypotenuse = pair !== 'opp-adj';
+  const sideClass = (used: boolean) => (used
+    ? `diagram-line ${metricClass(ratio)}`
+    : 'diagram-reference');
+  return (
+    <svg className="diagram-canvas" viewBox="0 0 180 132" focusable="false">
+      <text className="diagram-column-title" x="90" y="11" textAnchor="middle">RIGHT TRIANGLE</text>
+      <path
+        data-trig-side="adjacent"
+        className={sideClass(usesAdjacent)}
+        d={`M${originX} ${baseY} H${cornerX}`}
+      />
+      <path
+        data-trig-side="opposite"
+        className={sideClass(usesOpposite)}
+        d={`M${cornerX} ${baseY} V${apexY}`}
+      />
+      <path
+        data-trig-side="hypotenuse"
+        className={sideClass(usesHypotenuse)}
+        d={`M${originX} ${baseY} L${cornerX} ${apexY}`}
+      />
+      <path
+        className={`diagram-angle ${metricClass(theta)}`}
+        d={`M${originX + 18} ${baseY} A18 18 0 0 0 ${rounded(originX + 18 * Math.cos(angle * Math.PI / 180))} ${rounded(baseY - 18 * Math.sin(angle * Math.PI / 180))}`}
+      />
+      <path className="diagram-reference" d={`M${cornerX - 7} ${baseY} V${baseY - 7} H${cornerX}`} />
+      <text className="diagram-side-name" x={rounded(originX + adjacent / 2)} y={baseY + 21} textAnchor="middle">adj</text>
+      <text className="diagram-side-name" x={cornerX + 9} y={rounded((baseY + apexY) / 2)} textAnchor="start">opp</text>
+      <text className="diagram-side-name" x={rounded(originX + adjacent / 2) - 16} y={rounded((baseY + apexY) / 2) - 4} textAnchor="middle">hyp</text>
+      <MetricLabel item={theta} x={originX + 26} y={baseY - 6} anchor="start" />
+      <MetricLabel item={ratio} x={90} y={30} />
+    </svg>
+  );
+}
+
+function PowerDiagram({ view }: { view: CalculatorDiagramView }) {
+  const side = metric(view, 'side');
+  const cubic = view.variant === 'cube';
+  const measure = metric(view, cubic ? 'volume' : 'area');
+  const left = 46;
+  const top = 34;
+  const size = 56;
+  const depth = 16;
+  return (
+    <svg className="diagram-canvas" viewBox="0 0 180 132" focusable="false">
+      <text className="diagram-column-title" x="90" y="11" textAnchor="middle">
+        {cubic ? 'CUBE' : 'SQUARE'}
+      </text>
+      {cubic ? (
+        <g className="diagram-reference">
+          <path d={`M${left} ${top} l${depth} -${depth} h${size} v${size} l-${depth} ${depth}`} />
+          <path d={`M${left + size} ${top} l${depth} -${depth}`} />
+        </g>
+      ) : null}
+      <path
+        data-power-face="front"
+        className={`diagram-line ${metricClass(measure)}`}
+        d={`M${left} ${top} h${size} v${size} h-${size} Z`}
+      />
+      <path
+        data-power-side="edge"
+        className={`diagram-dimension ${metricClass(side)}`}
+        d={`M${left} ${top + size + 10} h${size} M${left} ${top + size + 7} v6 M${left + size} ${top + size + 7} v6`}
+      />
+      <MetricLabel item={side} x={left + size / 2} y={top + size + 20} />
+      <MetricLabel item={measure} x={left + size / 2} y={top + size / 2 - 4} />
+    </svg>
+  );
+}
+
 function DiagramGraphic({ view }: { view: CalculatorDiagramView }) {
   if (view.kind === 'right-triangle') return <TriangleDiagram view={view} />;
   if (view.kind === 'circle') return <CircleDiagram view={view} />;
@@ -590,6 +746,10 @@ function DiagramGraphic({ view }: { view: CalculatorDiagramView }) {
   if (view.kind === 'roof') return <RoofDiagram view={view} />;
   if (view.kind === 'stairs') return <StairDiagram view={view} />;
   if (view.kind === 'solids') return <SolidsDiagram view={view} />;
+  if (view.kind === 'trig') return <TrigDiagram view={view} />;
+  if (view.kind === 'power') return <PowerDiagram view={view} />;
+  if (view.kind === 'velocity') return <VelocityDiagram view={view} />;
+  if (view.kind === 'angle') return <AngleNotationDiagram view={view} />;
   return <FanLawDiagram view={view} />;
 }
 
