@@ -108,7 +108,8 @@ describe('physical HVAC keypad layout', () => {
       onFactoryReset: () => undefined,
     }));
 
-    expect(markup).toContain('RESET: × + On/C · KEYBOARD: * + Esc');
+    // The visible hint line was removed; the chord stays documented on the
+    // controls themselves, which the two assertions below still pin.
     expect(markup).toMatch(/<button(?=[^>]*disabled="")(?=[^>]*data-key="7")[^>]*>/);
     expect(markup).toMatch(/<button(?=[^>]*data-key="multiply")(?=[^>]*tabindex="-1")[^>]*>/);
     expect(markup).toContain('Touch reset modifier: hold Multiply, then press On/C. Keyboard reset: hold asterisk and press Escape');

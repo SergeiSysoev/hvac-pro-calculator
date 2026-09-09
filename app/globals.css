@@ -243,17 +243,11 @@ button { -webkit-tap-highlight-color: transparent; }
   min-height: 49px;
   flex: 0 0 auto;
   align-items: end;
-  grid-template-columns: 1fr 52px 65px;
+  /* Настройки, Off и On/C прижаты вправо в одну строку. */
+  grid-template-columns: auto 52px 65px;
+  justify-content: end;
   gap: 9px;
   padding: 0 4px 2px;
-}
-
-.reset-label {
-  align-self: center;
-  color: #a9afad;
-  font-size: 10px;
-  font-weight: 650;
-  line-height: 1.2;
 }
 
 .power-key,
@@ -402,7 +396,8 @@ button { -webkit-tap-highlight-color: transparent; }
 }
 
 .calc-display-physical {
-  min-height: clamp(184px, 24dvh, 232px);
+  /* Taller now that the hint line is gone from the row below it. */
+  min-height: clamp(212px, 29dvh, 292px);
   margin-bottom: 5px;
   padding: 16px 17px;
   justify-content: space-between;

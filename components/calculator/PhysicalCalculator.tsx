@@ -179,7 +179,6 @@ export default function PhysicalCalculator({
         <CalculatorDisplay active={active} state={state} variant="physical" />
 
         <div className="power-row">
-          <span className="reset-label">RESET: × + On/C · KEYBOARD: * + Esc</span>
           {onOpenPreferences ? (
             <button
               type="button"
