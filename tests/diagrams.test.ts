@@ -61,7 +61,11 @@ function taggedPath(markup: string, attribute: string, value: string): string {
 }
 
 function metricLabelX(markup: string, id: string): number {
-  const value = markup.match(new RegExp(`<g[^>]+data-metric="${id}"[^>]*><text x="([^"]+)"`))?.[1];
+  // A tag may be preceded by its leader path, so find the first <text> inside
+  // the group rather than assuming it is the group's first child.
+  const value = markup
+    .match(new RegExp(`<g[^>]+data-metric="${id}"[^>]*>(.*?)</g>`))?.[1]
+    ?.match(/<text x="([^"]+)"/)?.[1];
   expect(value, `missing label position for ${id}`).toBeDefined();
   return Number(value);
 }
@@ -1527,8 +1531,9 @@ describe('calculation diagrams', () => {
 
     expect(state.display.label).toBe('FPM');
     expect(view.kind).toBe('velocity');
-    // The reading the operator typed stays marked as theirs through the cycle.
-    expect(metric(view, 'entry')).toMatchObject({ status: 'entered', value: '0.049' });
+    // The reading the operator typed is shown in the row whose part it plays,
+    // and is not repeated as a second row saying the same number.
+    expect(view.metrics.some((item) => item.id === 'entry')).toBe(false);
     expect(metric(view, 'speed')).toMatchObject({ active: true, status: 'calculated' });
     // The entry is the pressure that produced this velocity, so it belongs in
     // the pressure row - never paired against the opposite conversion of itself.
@@ -1579,6 +1584,157 @@ describe('calculation diagrams', () => {
     expect(metric(computed, 'source')).toMatchObject({ status: 'calculated', value: '53.1301°' });
     const computedMarkup = renderToStaticMarkup(createElement(CalculatorDiagram, { view: computed }));
     expect(computedMarkup).toContain('53.1301°');
+  });
+
+  it('lists every known value, and keeps numbers off the drawing', () => {
+    const state = run(['6', 'inch', 'circ']);
+    const view = calculatorDiagramView(state)!;
+    const markup = renderToStaticMarkup(createElement(CalculatorDiagram, { view }));
+
+    // A quantity the calculator knows is shown with its number, never as a bare
+    // symbol: a radius reading "r" with no value was the original complaint.
+    for (const id of ['diameter', 'radius', 'circumference', 'area']) {
+      const item = metric(view, id);
+      expect(item.value, id).toBeDefined();
+      expect(markup, id).toContain(`data-value-for="${id}"`);
+      expect(markup, id).toContain(item.value!);
+    }
+
+    // The drawing itself carries no numbers, which is what used to make labels
+    // land on the lines and on each other.
+    const canvas = markup.slice(markup.indexOf('<svg'), markup.indexOf('</svg>'));
+    expect(canvas).not.toContain('6″');
+    expect(canvas).not.toContain('28.27433');
+  });
+
+  it('keeps a row even when two quantities read the same', () => {
+    // Round numbers collide constantly in this trade: a stair whose opening
+    // equals its total rise must still show the opening it is displaying.
+    let state = run(['1', '0', 'feet', 'rise', 'stair']);
+    for (let step = 0; step < 6; step += 1) state = run(['stair'], state);
+    const view = calculatorDiagramView(state)!;
+    const markup = renderToStaticMarkup(createElement(CalculatorDiagram, { view }));
+
+    expect(state.display.label.trim()).toBe('OPEN');
+    expect(metric(view, 'opening').value).toBe(metric(view, 'rise').value);
+    expect(markup).toContain('data-value-for="opening"');
+    expect(markup).toContain('data-value-for="rise"');
+  });
+
+  it('never leaves a figure without a single number', () => {
+    // A Fan Law entered with a zero register drew four empty boxes and an empty
+    // list: the operator was told nothing at all.
+    const zero = calculatorDiagramView(run(['0', 'conv', '7']))!;
+    const markup = renderToStaticMarkup(createElement(CalculatorDiagram, { view: zero }));
+    expect(markup).toMatch(/data-value-for="/);
+    const active = zero.metrics.find((item) => item.active)!;
+    expect(active.value ?? active.placeholder).toBeTruthy();
+  });
+
+  it('names the same quantity the same way on the drawing and in the list', () => {
+    // A rename of similar length is a different quantity - riser height becoming
+    // the number of risers - and the two surfaces must not disagree about it.
+    let state = run(['1', '0', 'feet', 'rise', 'stair']);
+    for (let step = 0; step < 14; step += 1) {
+      const view = calculatorDiagramView(state)!;
+      for (const item of view.metrics) {
+        if (!item.tagSymbol) continue;
+        expect(
+          item.symbol.length - item.tagSymbol.length,
+          `${state.display.label}: ${item.tagSymbol} vs ${item.symbol}`,
+        ).toBeGreaterThanOrEqual(2);
+      }
+      state = run(['stair'], state);
+    }
+  });
+
+  it('points the drawing only at what is in play', () => {
+    const view = calculatorDiagramView(run(['6', 'inch', 'circ']))!;
+    const markup = renderToStaticMarkup(createElement(CalculatorDiagram, { view }));
+    const canvas = markup.slice(markup.indexOf('<svg'), markup.indexOf('</svg>'));
+
+    // Diameter is the entered value and the current result, so it is called out.
+    expect(canvas).toContain('data-metric="diameter"');
+    // The others are solved and not current: their numbers are in the list, and
+    // putting nine callouts on this canvas is what piled them up.
+    expect(metric(view, 'radius').status).toBe('calculated');
+    expect(canvas).not.toContain('data-metric="radius"');
+    expect(canvas).not.toContain('data-metric="area"');
+  });
+
+  it('fills a shape only while its area is the result on screen', () => {
+    const fill = (keys: KeyId[]) => {
+      const markup = renderToStaticMarkup(createElement(CalculatorDiagram, {
+        view: calculatorDiagramView(run(keys))!,
+      }));
+      return markup.includes('diagram-area');
+    };
+    // A filled shape means "this area is the answer", so it must not be painted
+    // while a length or an angle is showing - in any figure, not just the circle.
+    expect(fill(['6', 'inch', 'circ'])).toBe(false);
+    expect(fill(['6', 'inch', 'circ', 'circ'])).toBe(false);
+    expect(fill(['6', 'inch', 'circ', 'circ', 'circ'])).toBe(true);
+
+    const lawCos: KeyId[] = ['3', 'conv', '4', '4', 'conv', '5', '5', 'conv', '6', 'conv', '9'];
+    let state = run(lawCos);
+    expect(state.sequence?.id, 'law of cosines must actually start').toBe('lawcos');
+    // Walk the whole cycle: the fill must appear on the area step and nowhere
+    // else, which is the regression that shipped when only step 0 was checked.
+    const filled: string[] = [];
+    for (let step = 0; step < state.sequence!.results.length; step += 1) {
+      const view = calculatorDiagramView(state)!;
+      const markup = renderToStaticMarkup(createElement(CalculatorDiagram, { view }));
+      if (markup.includes('diagram-area')) filled.push(state.display.label.trim());
+      state = run([state.sequence!.trigger], state);
+    }
+    expect(filled).toEqual(['AREA']);
+  });
+
+  it('keeps every number off every drawing', () => {
+    // The drawing carries short tags; the numbers live in the list under it.
+    // Fan Law used to print its value inside the box and was the one figure
+    // where a number could still collide with the geometry.
+    const workflows: KeyId[][] = [
+      ['6', 'inch', 'circ'],
+      ['3', 'feet', 'run', '4', 'feet', 'rise', 'pitch'],
+      ['1', '0', 'feet', '1', 'inch', 'rise', '1', '5', 'feet', '5', 'inch', 'run', 'stair'],
+      ['7', 'inch', 'pitch', '1', '0', 'feet', 'run', 'hip'],
+      ['1', '4', '0', '0', 'conv', '4', '7', '5', '0', 'conv', '5', '1', '6', '0', '0', 'conv', '7', 'conv', 'rise'],
+      ['2', 'feet', '4', 'inch', 'circ', '4', 'feet', '6', 'inch', 'rise', 'conv', 'right'],
+      ['1', '0', 'feet', 'run', '5', 'feet', 'rise', '7', 'feet', 'conv', '4', 'conv', 'left'],
+      ['3', '0', 'sin'],
+    ];
+    const states: CalculatorState[] = [];
+    for (const keys of workflows) {
+      let state = run(keys);
+      states.push(state);
+      // Later steps rename the symbol and are where the regressions live.
+      for (let step = 0; step < (state.sequence?.results.length ?? 0); step += 1) {
+        state = run([state.sequence!.trigger], state);
+        states.push(state);
+      }
+    }
+    for (const state of states) {
+      const view = calculatorDiagramView(state);
+      if (!view) continue;
+      const keys = [state.display.label];
+      const markup = renderToStaticMarkup(createElement(CalculatorDiagram, { view }));
+      const canvas = markup.slice(markup.indexOf('<svg'), markup.indexOf('</svg>'));
+      const texts = [...canvas.matchAll(/<text([^>]*)>(.*?)<\/text>/g)]
+        // Column titles and the static side names are part of the drawing, not
+        // callouts; everything else must be a declared tag.
+        .filter((m) => !/diagram-column-title|diagram-side-name/.test(m[1]))
+        .map((m) => m[2].replace(/<[^>]*>/g, '').trim())
+        .filter(Boolean);
+      // Exactly the tags this view declares, and nothing else: a symbol may
+      // carry a digit (JK1) or a sign (%GRD), a measurement never may.
+      const allowed = new Set(view.metrics.flatMap((item) => (
+        [item.tagSymbol ?? item.symbol].flatMap((tag) => [`● ${tag}`, `? ${tag}`, `✓ ${tag}`])
+      )));
+      for (const text of texts) {
+        expect(allowed.has(text), `${keys.join(' ')} -> ${text}`).toBe(true);
+      }
+    }
   });
 
   it('shows the exact current value at every mapped special-function cycle step', () => {

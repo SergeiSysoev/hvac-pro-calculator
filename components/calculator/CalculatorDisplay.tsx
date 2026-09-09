@@ -108,6 +108,13 @@ export default function CalculatorDisplay({
                 </div>
                 {view.resultText ? (
                   <div className="expression-result">
+                    <span className="expression-result-label">
+                      {view.resultRole === 'group'
+                        ? 'Current group'
+                        : view.resultRole === 'conversion'
+                          ? 'Converted'
+                          : 'Result'}
+                    </span>
                     {view.resultSymbol ? <span className="expression-result-symbol">{view.resultSymbol}</span> : null}
                     <ExpressionText className="expression-result-text" text={view.resultText} />
                   </div>

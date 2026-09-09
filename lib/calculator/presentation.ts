@@ -16,6 +16,11 @@ export interface CalculatorExpressionView {
   expressionText: string;
   resultText?: string;
   resultSymbol?: '=' | '≈';
+  /**
+   * What the second line actually is. Never infer this from resultSymbol: that
+   * flag is absent for an inner group and for an exact conversion alike.
+   */
+  resultRole?: 'result' | 'group' | 'conversion';
   valueLabel?: string;
   valueText?: string;
   valueSymbol?: '=' | '≈';
@@ -50,6 +55,14 @@ export type CalculatorDiagramStatus = 'entered' | 'expected' | 'calculated';
 export interface CalculatorDiagramMetric {
   id: string;
   symbol: string;
+  /**
+   * The element's own short symbol, kept for the drawing when the result cycle
+   * renames the metric. A tag reading "theta" must not become "%GRD" on the
+   * canvas: the position is chosen for the element, and a four-times wider tag
+   * grows straight into the line it stands beside. The renamed label belongs in
+   * the value list, where it has room and carries its number.
+   */
+  tagSymbol?: string;
   label: string;
   value?: string;
   placeholder: string;
@@ -844,7 +857,10 @@ function displayContext(state: CalculatorState, hasCompletedExpression: boolean)
     state.preferences.mathMode === 'chain'
     && activeItems.some((item) => item.type === 'operator')
   ) return 'Chain mode';
-  if (hasCompletedExpression || state.lastKey === 'equals') return 'Result';
+  // The line under this caption is the expression, finished or not. Calling it
+  // "Result" here put the word above the example and left the actual result
+  // unlabelled on the line below.
+  if (hasCompletedExpression || state.lastKey === 'equals') return 'Expression';
   const hasLiveOperand = Boolean(
     state.entry
     || state.current
@@ -1493,9 +1509,19 @@ function finishDiagram(
       || metric.label.startsWith(`${currentSemantic.label} `)
       || currentSemantic.label.startsWith(`${metric.label} `)
     );
+    const renamedSymbol = currentSequenceResult.label.replace(/(?: \([^)]*\))? STORED$/, '');
     return {
       ...metric,
-      symbol: currentSequenceResult.label.replace(/(?: \([^)]*\))? STORED$/, ''),
+      symbol: renamedSymbol,
+      // Keep the element's own symbol on the drawing only when the rename is a
+      // different WRITING of the same quantity and is materially wider - theta
+      // becoming %GRD is the same angle, and a four-times wider tag grows into
+      // the line it stands beside. A rename of similar length is a different
+      // quantity (R-HT -> RSRS is a height becoming a count), and there the
+      // drawing must say what the list says.
+      tagSymbol: renamedSymbol.length - metric.symbol.length >= 2
+        ? metric.symbol
+        : undefined,
       label: currentSemantic.label,
       value: diagramValue(currentSequenceResult.value, state),
       // Selecting an item in a result cycle must not erase its provenance.
@@ -2424,11 +2450,14 @@ function velocityDiagram(state: CalculatorState): CalculatorDiagramView | undefi
             : undefined,
         showsSpeed, showsPressure, 'after solve',
       ),
-      diagramMetric(
+      // Off its own step the reading is already shown in the row whose part it
+      // plays, so repeating it would say the same number twice. The figure keeps
+      // its height through the cycle from CSS, not from a filler row.
+      ...(label === 'ENTRY' ? [diagramMetric(
         'entry', 'ENT', 'Entered reading',
         diagramValue(entry, state),
-        true, label === 'ENTRY', 'enter a reading',
-      ),
+        true, true, 'enter a reading',
+      )] : []),
     ],
   });
 }
@@ -2981,6 +3010,13 @@ export function calculatorExpressionView(state: CalculatorState): CalculatorExpr
     contextText,
     expressionText,
     resultText,
+    resultRole: resultText === undefined || hasError
+      ? undefined
+      : hasOuterGroupExpression
+        ? 'group'
+        : hasTransformation
+          ? 'conversion'
+          : 'result',
     resultSymbol: hasTransformation
       ? resultIsApproximate ? '≈' : undefined
       : !hasError

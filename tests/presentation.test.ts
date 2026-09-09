@@ -67,7 +67,7 @@ describe('modern calculator expression display', () => {
     expect(calculatorExpressionView(result)).toMatchObject({
       expressionText: '8′ 2 3/8″ + 1′ 9 5/8″',
       resultText: '10′ 0″',
-      contextText: 'Result',
+      contextText: 'Expression',
     });
   });
 
@@ -914,6 +914,28 @@ describe('modern calculator expression display', () => {
     });
   });
 
+  it('names the second line for what it actually is', () => {
+    // The equals sign is a "print an equals" flag, not a "this is the answer"
+    // flag: it is absent for an inner group AND for an exact conversion. Reading
+    // the role off that glyph called 6 Feet -> 72 inches a "Current group", and
+    // called the 7 inside 2 x (3 + 4) the result.
+    const role = (keys: KeyId[]) => calculatorExpressionView(run(keys)).resultRole;
+
+    expect(role(['5', 'multiply', '5', 'equals'])).toBe('result');
+    expect(role(['3', '0', 'sin'])).toBe('result');
+    expect(role(['2', 'multiply', 'left', '3', 'add', '4', 'right'])).toBe('group');
+    expect(role(['2', 'add', 'left', '3', 'add', '4', 'right'])).toBe('group');
+    // Conversions, exact and approximate alike - the exact ones are the case
+    // that regressed, because they carry no equals sign.
+    expect(role(['6', 'feet', 'conv', 'inch'])).toBe('conversion');
+    expect(role(['1', '0', 'feet', 'conv', 'meter'])).toBe('conversion');
+    expect(role(['3', 'feet', 'conv', 'meter'])).toBe('conversion');
+    expect(role(['3', '0', 'decimal', '3', '0', 'conv', 'decimal'])).toBe('conversion');
+    // No second line, no role.
+    expect(role(['5'])).toBeUndefined();
+    expect(role(['5', 'divide', '0', 'equals'])).toBeUndefined();
+  });
+
   it('renders semantic result suffixes once and without a calculator-style trailing dot', () => {
     const grade = calculatorExpressionView(run([
       '6', 'inch', 'pitch', 'pitch', 'pitch',
@@ -1402,7 +1424,7 @@ describe('modern calculator expression display', () => {
     const toggledOff = run(['conv', 'conv'], completed);
     expect(toggledOff.modifier).toBeUndefined();
     expect(calculatorExpressionView(toggledOff)).toMatchObject({
-      contextText: 'Result',
+      contextText: 'Expression',
       expressionText: '2 + 3',
       resultText: '5',
     });

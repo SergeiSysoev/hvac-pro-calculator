@@ -57,6 +57,25 @@ describe('calculator accessibility text', () => {
     );
   });
 
+  it('labels the result line with the word the state calls for', () => {
+    const label = (keys: KeyId[]) => {
+      const state = keys.reduce(
+        (current, key) => calculatorReducer(current, { type: 'press', key }),
+        initialCalculatorState(),
+      );
+      const markup = renderToStaticMarkup(createElement(CalculatorDisplay, {
+        active: true,
+        state,
+        variant: 'physical',
+      }));
+      return markup.match(/class="expression-result-label">([^<]*)</)?.[1];
+    };
+
+    expect(label(['5', 'multiply', '5', 'equals'])).toBe('Result');
+    expect(label(['2', 'multiply', 'left', '3', 'add', '4', 'right'])).toBe('Current group');
+    expect(label(['6', 'feet', 'conv', 'inch'])).toBe('Converted');
+  });
+
   it('describes the diagram outside the decorative SVG and keeps one live region', () => {
     const keys: KeyId[] = ['8', 'feet', 'run', '6', 'feet', 'rise', 'diag'];
     const triangle = keys.reduce(

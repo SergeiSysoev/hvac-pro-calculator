@@ -459,7 +459,7 @@ button { -webkit-tap-highlight-color: transparent; }
   display: grid;
   min-height: 82px;
   align-items: center;
-  grid-template-columns: clamp(132px, 45%, 230px) minmax(0, 1fr);
+  grid-template-columns: clamp(132px, 48%, 268px) minmax(0, 1fr);
   gap: clamp(6px, 1.8vw, 14px);
 }
 
@@ -485,22 +485,53 @@ button { -webkit-tap-highlight-color: transparent; }
   display: block;
   width: 100%;
   height: auto;
-  max-height: 112px;
+  /* Tall enough that the drawing fills the column instead of letterboxing
+     inside it - a shrunken figure is what made the callouts crowd. */
+  max-height: 146px;
   overflow: visible;
 }
 
 .diagram-canvas text {
   fill: currentColor;
   font-family: var(--font-geist-sans), -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  font-size: 14.5px;
+  font-size: 13px;
   font-variant-numeric: lining-nums tabular-nums;
-  font-weight: 760;
+  font-weight: 680;
   letter-spacing: -.01em;
   paint-order: stroke;
   stroke: #f2f2f4;
-  stroke-width: 2px;
+  stroke-width: 4px;
   stroke-linejoin: round;
 }
+
+.diagram-values {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 1px 9px;
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
+  font-variant-numeric: lining-nums tabular-nums;
+  font-size: 11.5px;
+  line-height: 1.25;
+  /* Two rows of headroom so the drawing does not move when a cycle step lists
+     one value instead of two. */
+  min-height: 2.5em;
+}
+
+.diagram-value-row {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.diagram-value-marker { font-size: .85em; }
+.diagram-value-symbol { font-weight: 700; }
+.diagram-value-amount { color: #48484f; font-weight: 560; }
+.diagram-value-row.is-current .diagram-value-amount { color: inherit; font-weight: 700; }
+.diagram-value-row.diagram-status-expected .diagram-value-amount { font-style: italic; }
 
 .diagram-line,
 .diagram-angle,
@@ -555,11 +586,20 @@ button { -webkit-tap-highlight-color: transparent; }
 }
 
 .diagram-area.is-current { fill-opacity: .16; }
-.diagram-metric-label.is-current text:first-child { font-size: 16px; font-weight: 880; }
-.diagram-metric-value { font-size: 11.5px !important; font-weight: 720 !important; }
+/* The current callout is emphasised, not shouted: it is a one-to-five character
+   tag on a small drawing, and the number it belongs to is in the list below. */
+.diagram-metric-label.is-current text:first-child { font-size: 1.12em; font-weight: 800; }
 .diagram-status-marker { font-size: .92em; }
 .diagram-column-title { color: #62626a; font-size: 10.5px !important; letter-spacing: .06em !important; }
 .diagram-arrow { fill: none; }
+.diagram-leader {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: .8px;
+  stroke-dasharray: 2.5 2;
+  opacity: .5;
+  vector-effect: non-scaling-stroke;
+}
 
 .diagram-variable-box rect {
   fill: currentColor;
@@ -675,11 +715,15 @@ button { -webkit-tap-highlight-color: transparent; }
 }
 
 .expression-result {
-  display: flex;
+  display: grid;
   min-width: 0;
   align-items: baseline;
-  justify-content: flex-end;
-  gap: 8px;
+  justify-content: end;
+  /* The label sits on its own row: sharing the number's row made it shrink the
+     answer until it wrapped onto two lines. */
+  grid-template-areas: 'label label' 'symbol value';
+  grid-template-columns: auto minmax(0, auto);
+  gap: 0 8px;
   padding-top: 8px;
   border-top: 1px solid rgba(23, 23, 25, .11);
   color: #171719;
@@ -692,12 +736,29 @@ button { -webkit-tap-highlight-color: transparent; }
   text-align: right;
 }
 
+.expression-result-label {
+  grid-area: label;
+  justify-self: start;
+  min-width: 0;
+  overflow: hidden;
+  color: #8e8e93;
+  font-size: 12px;
+  font-weight: 640;
+  letter-spacing: 0;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+
 .expression-result-symbol {
+  grid-area: symbol;
   color: #8e8e93;
   font-weight: 500;
 }
 
 .expression-result-text {
+  grid-area: value;
   min-width: 0;
   overflow-wrap: anywhere;
 }
@@ -1172,8 +1233,6 @@ button { -webkit-tap-highlight-color: transparent; }
   .app-frame { height: min(100dvh, 1040px); border-inline: 1px solid rgba(255,255,255,.06); box-shadow: 0 30px 100px rgba(0,0,0,.5); }
   .display-body.has-diagram { grid-template-columns: minmax(210px, 33%) minmax(0, 1fr); }
   .diagram-canvas text { font-size: 11.5px; }
-  .diagram-metric-label.is-current text:first-child { font-size: 13px; }
-  .diagram-metric-value { font-size: 9.5px !important; }
   .diagram-caption { font-size: 11px; }
 }
 
