@@ -4,16 +4,10 @@ import {
   PointerEvent as ReactPointerEvent,
   useCallback,
   useEffect,
-  useMemo,
   useReducer,
   useRef,
   useState,
 } from 'react';
-import CalculatorDisplay from '@/components/calculator/CalculatorDisplay';
-import CalculatorKeypad, {
-  KeyAction,
-  KeyFace,
-} from '@/components/calculator/CalculatorKeypad';
 import DuctCalculator from '@/components/calculator/DuctCalculator';
 import PhysicalCalculator from '@/components/calculator/PhysicalCalculator';
 import PreferencesDialog from '@/components/calculator/PreferencesDialog';
@@ -28,7 +22,7 @@ import {
 const STORAGE_KEY = 'hvac-pro-calculator-state-v2';
 const LEGACY_STORAGE_KEY = 'hvac-4090-pro-state-v1';
 const PUBLIC_BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? '';
-const PAGE_NAMES = ['HVAC', 'Trade', 'Duct'] as const;
+const PAGE_NAMES = ['HVAC', 'Duct'] as const;
 
 const KEYBOARD_MAP: Record<string, KeyId> = {
   '0': '0', '1': '1', '2': '2', '3': '3', '4': '4',
@@ -183,65 +177,6 @@ export function calculatorKeyForKeyboardEvent(
   return KEYBOARD_MAP[eventKey];
 }
 
-function tradeKeys(accuracy: number): KeyFace[] {
-  return [
-    { id: 't-hip', label: 'Hip/V', key: 'hip' },
-    { id: 't-pitch', label: 'Pitch', key: 'pitch' },
-    { id: 't-jack', label: 'Jack', key: 'jack' },
-    { id: 't-stair', label: 'Stair', key: 'stair' },
-    { id: 't-offset', label: 'Offset', key: 'left', converted: true, tone: 'accent' },
-    { id: 't-column', label: 'Column', key: 'right', converted: true, tone: 'accent' },
-
-    { id: 't-ir-pitch', label: 'Ir/Pitch', key: 'hip', converted: true },
-    { id: 't-segment', label: 'Seg Rad', key: 'pitch', converted: true },
-    { id: 't-ir-jack', label: 'Ir/Jack', key: 'jack', converted: true },
-    { id: 't-riser', label: 'Riser', key: 'stair', converted: true },
-    { id: 't-circle', label: 'Circ', key: 'circ' },
-    { id: 't-arc', label: 'Arc', key: 'circ', converted: true },
-
-    { id: 't-x', label: 'x', key: 'run', detail: 'Run' },
-    { id: 't-y', label: 'y', key: 'rise', detail: 'Rise' },
-    { id: 't-r', label: 'r', key: 'diag', detail: 'Diag' },
-    { id: 't-theta', label: 'θ', key: 'pitch', detail: 'Pitch' },
-    { id: 't-on', label: 'On/C', key: 'on', tone: 'danger', powerControl: true },
-    { id: 't-inch', label: 'Inch', key: 'inch', tone: 'dark' },
-
-    { id: 't-conv', label: 'Conv', key: 'conv', tone: 'accent' },
-    { id: 't-recall', label: 'Rcl', key: 'recall', tone: 'dark' },
-    { id: 't-7', label: '7', key: '7', tone: 'number' },
-    { id: 't-8', label: '8', key: '8', tone: 'number' },
-    { id: 't-9', label: '9', key: '9', tone: 'number' },
-    { id: 't-divide', label: '÷', key: 'divide', tone: 'dark' },
-
-    { id: 't-memory', label: 'M+', key: 'mplus', tone: 'dark' },
-    { id: 't-fraction', label: '/', key: 'fraction', tone: 'dark' },
-    { id: 't-4', label: '4', key: '4', tone: 'number' },
-    { id: 't-5', label: '5', key: '5', tone: 'number' },
-    { id: 't-6', label: '6', key: '6', tone: 'number' },
-    { id: 't-multiply', label: '×', key: 'multiply', tone: 'dark' },
-
-    { id: 't-clear', label: 'C', key: 'on', tone: 'dark' },
-    { id: 't-sign', label: '+/−', key: 'subtract', converted: true, tone: 'dark' },
-    { id: 't-1', label: '1', key: '1', tone: 'number' },
-    { id: 't-2', label: '2', key: '2', tone: 'number' },
-    { id: 't-3', label: '3', key: '3', tone: 'number' },
-    { id: 't-subtract', label: '−', key: 'subtract', tone: 'dark' },
-
-    { id: 't-back', label: '←', key: 'backspace', tone: 'dark' },
-    { id: 't-feet', label: 'Feet', key: 'feet', tone: 'dark' },
-    { id: 't-0', label: '0', key: '0', tone: 'number' },
-    { id: 't-decimal', label: '.', key: 'decimal', tone: 'number' },
-    { id: 't-equals', label: '=', key: 'equals', tone: 'number' },
-    { id: 't-add', label: '+', key: 'add', tone: 'dark' },
-
-    { id: 't-meter', label: 'm', key: 'meter', secondary: 'mm', tone: 'dark' },
-    { id: 't-fan-1', label: 'Fan 1', key: 'run', converted: true },
-    { id: 't-fan-2', label: 'Fan 2', key: 'rise', converted: true },
-    { id: 't-fan-3', label: 'Fan 3', key: 'diag', converted: true },
-    { id: 't-velocity', label: 'VP/FPM', key: '0', converted: true },
-    { id: 't-accuracy', label: `1/${accuracy}`, action: 'accuracy', tone: 'dark' },
-  ];
-}
 
 type DragState = {
   pointerId: number;
@@ -385,17 +320,6 @@ export default function HvacCalculator() {
     dispatch({ type: 'toggle-preferences', open: true });
   }, []);
 
-  const handleAction = useCallback((action: KeyAction) => {
-    if (action === 'preferences') {
-      openPreferences();
-      return;
-    }
-    const options = [16, 32, 64, 2, 4, 8] as const;
-    const currentIndex = options.indexOf(state.preferences.fractionDenominator);
-    const next = options[(currentIndex + 1) % options.length];
-    dispatch({ type: 'set-preference', key: 'fractionDenominator', value: next });
-    if ('vibrate' in navigator) navigator.vibrate?.(7);
-  }, [openPreferences, state.preferences.fractionDenominator]);
 
   useEffect(() => {
     let resetMultiplyHeld = false;
@@ -405,7 +329,7 @@ export default function HvacCalculator() {
         dispatch({ type: 'toggle-preferences', open: false });
         return;
       }
-      if (state.preferencesOpen || activePage === 2) return;
+      if (state.preferencesOpen || activePage === 1) return;
 
       const calculatorFocused = isCalculatorKeyboardScopeTarget(event.target)
         && isCalculatorKeyboardScopeTarget(document.activeElement);
@@ -481,10 +405,6 @@ export default function HvacCalculator() {
     };
   }, [state.preferencesOpen]);
 
-  const trade = useMemo(
-    () => tradeKeys(state.preferences.fractionDenominator),
-    [state.preferences.fractionDenominator],
-  );
 
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!event.isPrimary || event.button !== 0 || isCarouselGestureControl(event.target)) return;
@@ -615,34 +535,12 @@ export default function HvacCalculator() {
                 state={state}
                 onPress={press}
                 onFactoryReset={factoryReset}
+                onOpenPreferences={openPreferences}
               />
             </div>
           </section>
 
-          <section
-            className="calculator-page"
-            aria-label="Trade calculator"
-            aria-hidden={activePage !== 1}
-            data-calculator-keyboard-scope={activePage === 1 ? 'active' : undefined}
-            inert={activePage !== 1}
-            tabIndex={activePage === 1 ? 0 : -1}
-          >
-            <div className="page-scroll keypad-page">
-              <div className="page-title-row">
-                <div>
-                  <span>PROFESSIONAL HVAC</span>
-                  <strong>Trade calculator</strong>
-                </div>
-                <button type="button" className="settings-button" aria-label="Open calculator preferences" disabled={!state.powered} onClick={openPreferences}>
-                  <span aria-hidden="true">⚙</span>
-                </button>
-              </div>
-              <CalculatorDisplay active={activePage === 1} state={state} />
-              <CalculatorKeypad keys={trade} modifier={state.modifier} powered={state.powered} onAction={handleAction} onPress={press} />
-            </div>
-          </section>
-
-          <section className="calculator-page" aria-label="Duct calculator" aria-hidden={activePage !== 2} inert={activePage !== 2}>
+          <section className="calculator-page" aria-label="Duct calculator" aria-hidden={activePage !== 1} inert={activePage !== 1}>
             <div className="page-scroll duct-page">
               <DuctCalculator />
             </div>

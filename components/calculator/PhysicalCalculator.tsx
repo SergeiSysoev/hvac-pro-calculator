@@ -98,6 +98,8 @@ interface PhysicalCalculatorProps {
   state: CalculatorState;
   onPress: (key: KeyId) => void;
   onFactoryReset: () => void;
+  /** Preferences were only reachable from the removed Trade screen. */
+  onOpenPreferences?: () => void;
 }
 
 export default function PhysicalCalculator({
@@ -105,6 +107,7 @@ export default function PhysicalCalculator({
   state,
   onPress,
   onFactoryReset,
+  onOpenPreferences,
 }: PhysicalCalculatorProps) {
   const heldResetPointers = useRef(new Set<number>());
   const resetOnPointers = useRef(new Set<number>());
@@ -177,6 +180,17 @@ export default function PhysicalCalculator({
 
         <div className="power-row">
           <span className="reset-label">RESET: × + On/C · KEYBOARD: * + Esc</span>
+          {onOpenPreferences ? (
+            <button
+              type="button"
+              className="settings-button"
+              aria-label="Open calculator preferences"
+              disabled={!state.powered}
+              onClick={onOpenPreferences}
+            >
+              <span aria-hidden="true">⚙</span>
+            </button>
+          ) : null}
           <button
             type="button"
             className="power-key power-off"
