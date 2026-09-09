@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import {
@@ -207,5 +208,22 @@ describe('trade keypad accessibility', () => {
       key: 'run',
       secondary: 'Fan Law 1',
     })).toBe('x Run; Conv function Fan Law 1');
+  });
+});
+
+describe('what the stylesheet drags into the bundle', () => {
+  it('imports no package by name', () => {
+    // `@import 'tailwindcss'` sat at the top of this file with no PostCSS
+    // config to resolve it, so the bundler read the bare specifier as a
+    // JavaScript module: the whole 533 kB Tailwind compiler shipped to the
+    // phone and not one byte of Tailwind CSS was emitted. Nothing here uses a
+    // utility class, so removing the line changed the stylesheet not at all
+    // and removed a third of the download. A relative import or a url() is
+    // still a stylesheet; a bare name is a package.
+    const css = readFileSync(new URL('../app/globals.css', import.meta.url), 'utf8');
+    const specifiers = [...css.matchAll(/@import\s+(?:url\()?['"]([^'"]+)['"]/g)]
+      .map((match) => match[1])
+      .filter((specifier) => !/^(?:[./]|https?:|data:)/.test(specifier));
+    expect(specifiers).toEqual([]);
   });
 });
