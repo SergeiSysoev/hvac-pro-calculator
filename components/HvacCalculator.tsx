@@ -1,7 +1,6 @@
 'use client';
 
 import {
-  PointerEvent as ReactPointerEvent,
   useCallback,
   useEffect,
   useReducer,
@@ -11,7 +10,7 @@ import {
 import DuctCalculator from '@/components/calculator/DuctCalculator';
 import PhysicalCalculator from '@/components/calculator/PhysicalCalculator';
 import PreferencesDialog from '@/components/calculator/PreferencesDialog';
-import { projectedPageIndex, rubberBandDistance } from '@/lib/carousel';
+import { pageIndexForScroll } from '@/lib/carousel';
 import {
   KeyId,
   calculatorReducer,
@@ -65,43 +64,7 @@ const TEXT_ENTRY_KEY_TARGETS = [
   '[role="spinbutton"]',
 ].join(', ');
 
-// What a horizontal drag must NOT start on. A push control is deliberately
-// absent from this list: on a calculator the keypad IS the surface, so
-// excluding `button` excluded roughly everything below the display and left a
-// pager you could only work from a 150 px strip at the top. Measured in a real
-// browser with touch emulation: a swipe begun on the display paged, the same
-// swipe begun on a key did nothing at all.
-//
-// A tap on a key is unharmed. The drag only locks after 10 px of mostly
-// horizontal movement, and from that moment the viewport holds the pointer
-// capture and `suppressClick` eats the click; a plain tap never locks, so the
-// key fires exactly as before. What stays excluded is everything where a drag
-// already means something else - text selection, a slider, a native picker,
-// dragging a link - or where the browser owns the gesture.
-const CAROUSEL_GESTURE_EXCLUSION_TARGETS = [
-  'a[href]',
-  'input:not([type="hidden"])',
-  'select',
-  'textarea',
-  'label',
-  'option',
-  'summary',
-  '[controls]',
-  '[contenteditable]:not([contenteditable="false"])',
-  '[role="link"]',
-  '[role="checkbox"]',
-  '[role="radio"]',
-  '[role="switch"]',
-  '[role="slider"]',
-  '[role="spinbutton"]',
-  '[role="textbox"]',
-  '[role="combobox"]',
-  '[role="menuitem"]',
-  '[role="option"]',
-].join(', ');
-
 const ACTIVE_CALCULATOR_KEYBOARD_SCOPE = '[data-calculator-keyboard-scope="active"]';
-const RELEASE_VELOCITY_MEMORY_MS = 120;
 
 type KeyboardEventTarget = EventTarget & {
   closest?: (selector: string) => Element | null;
@@ -124,14 +87,6 @@ export function isTextEntryKeyboardTarget(target: EventTarget | null): boolean {
     && candidate.closest(TEXT_ENTRY_KEY_TARGETS) !== null;
 }
 
-export function isCarouselGestureControl(target: EventTarget | null): boolean {
-  if (!target) return false;
-  const candidate = target as KeyboardEventTarget;
-  if (candidate.isContentEditable) return true;
-  return typeof candidate.closest === 'function'
-    && candidate.closest(CAROUSEL_GESTURE_EXCLUSION_TARGETS) !== null;
-}
-
 export function isCalculatorKeyboardScopeTarget(target: EventTarget | null): boolean {
   if (!target) return false;
   const candidate = target as KeyboardEventTarget;
@@ -139,33 +94,7 @@ export function isCalculatorKeyboardScopeTarget(target: EventTarget | null): boo
     && candidate.closest(ACTIVE_CALCULATOR_KEYBOARD_SCOPE) !== null;
 }
 
-export function releasePointerVelocity(
-  previousVelocity: number,
-  lastX: number,
-  lastTime: number,
-  releaseX: number,
-  releaseTime: number,
-): number {
-  if (![previousVelocity, lastX, lastTime, releaseX, releaseTime].every(Number.isFinite)) return 0;
-  const elapsed = Math.max(releaseTime - lastTime, 1);
-  const releaseSample = (releaseX - lastX) / elapsed * 1000;
-  const historyWeight = Math.max(0, 1 - elapsed / RELEASE_VELOCITY_MEMORY_MS);
-  return previousVelocity * historyWeight + releaseSample * (1 - historyWeight);
-}
 
-export function carouselOffsetForPointer(
-  baseOffset: number,
-  startX: number,
-  pointerX: number,
-  width: number,
-  pageCount: number,
-): number {
-  const minimum = -Math.max(0, pageCount - 1) * width;
-  let next = baseOffset + pointerX - startX;
-  if (next > 0) next = rubberBandDistance(next, width);
-  if (next < minimum) next = minimum + rubberBandDistance(next - minimum, width);
-  return next;
-}
 
 export function calculatorKeyForKeyboardEvent(
   eventKey: string,
@@ -189,80 +118,40 @@ export function calculatorKeyForKeyboardEvent(
 }
 
 
-type DragState = {
-  pointerId: number;
-  startX: number;
-  startY: number;
-  baseOffset: number;
-  lastX: number;
-  lastTime: number;
-  velocity: number;
-  locked: boolean;
-};
-
 export default function HvacCalculator() {
   const [state, dispatch] = useReducer(calculatorReducer, undefined, initialCalculatorState);
   const [activePage, setActivePage] = useState(0);
-  const [trackOffset, setTrackOffsetState] = useState(0);
-  const [dragging, setDragging] = useState(false);
   const hydrated = useRef(false);
   const viewport = useRef<HTMLDivElement>(null);
   const viewportWidth = useRef(0);
   const activePageRef = useRef(0);
-  const trackOffsetRef = useRef(0);
-  const dragState = useRef<DragState | null>(null);
-  const animationFrame = useRef<number | null>(null);
-  const suppressClick = useRef(false);
   const preferencesDialog = useRef<HTMLElement>(null);
   const preferencesOpener = useRef<HTMLElement | null>(null);
 
-  const setTrackOffset = useCallback((value: number) => {
-    trackOffsetRef.current = value;
-    setTrackOffsetState(value);
-  }, []);
+  /* PAGING IS THE BROWSER'S SCROLL, NOT OUR GESTURE.
+     This used to be a hand-written pager: capture the pointer, follow the
+     finger with a transform, project a flick, spring to the nearest page. It
+     never worked on a phone. To follow a finger sideways you must first take
+     the horizontal gesture away from the browser with `touch-action`, and that
+     rule is resolved only as far up as the nearest scroll container - which on
+     this page sits INSIDE the pager, so the browser kept the gesture, sent a
+     few moves and cancelled the pointer. The track followed the finger a
+     quarter of the way and sprang back, every time, on every screen.
 
-  const cancelAnimation = useCallback(() => {
-    if (animationFrame.current !== null) cancelAnimationFrame(animationFrame.current);
-    animationFrame.current = null;
-  }, []);
-
-  const animateToPage = useCallback((page: number, initialVelocity = 0) => {
+     A scroll container with scroll-snap has no such argument to lose: the
+     browser was always going to own this gesture, so it owns it, with its own
+     inertia and its own rubber band. What is left here is reading which page
+     the scroll landed on, and scrolling to one when a dot is tapped. */
+  const goToPage = useCallback((page: number) => {
+    const element = viewport.current;
     const width = viewportWidth.current;
-    const targetPage = Math.max(0, Math.min(PAGE_NAMES.length - 1, page));
-    const target = -targetPage * width;
-    cancelAnimation();
-    activePageRef.current = targetPage;
-    setActivePage(targetPage);
-
-    if (!width || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      setTrackOffset(target);
-      return;
-    }
-
-    let velocity = initialVelocity;
-    let lastTime = performance.now();
-    const damping = Math.abs(initialVelocity) > 80 ? 31 : 38;
-    const stiffness = 360;
-
-    const tick = (time: number) => {
-      const deltaTime = Math.min((time - lastTime) / 1000, 0.032);
-      lastTime = time;
-      const position = trackOffsetRef.current;
-      const acceleration = -stiffness * (position - target) - damping * velocity;
-      velocity += acceleration * deltaTime;
-      const next = position + velocity * deltaTime;
-      setTrackOffset(next);
-
-      if (Math.abs(next - target) < 0.35 && Math.abs(velocity) < 7) {
-        setTrackOffset(target);
-        animationFrame.current = null;
-        return;
-      }
-      animationFrame.current = requestAnimationFrame(tick);
-    };
-
-    animationFrame.current = requestAnimationFrame(tick);
-  }, [cancelAnimation, setTrackOffset]);
+    const target = Math.max(0, Math.min(PAGE_NAMES.length - 1, page));
+    activePageRef.current = target;
+    setActivePage(target);
+    if (!element || !width) return;
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    element.scrollTo({ left: target * width, behavior: reduceMotion ? 'auto' : 'smooth' });
+  }, []);
 
   useEffect(() => {
     activePageRef.current = activePage;
@@ -275,16 +164,40 @@ export default function HvacCalculator() {
       const width = element.getBoundingClientRect().width;
       if (!width) return;
       viewportWidth.current = width;
-      cancelAnimation();
-      setTrackOffset(-activePageRef.current * width);
+      // A rotation or a keyboard must not leave the page half-shown.
+      element.scrollTo({ left: activePageRef.current * width, behavior: 'auto' });
     };
     resize();
     const observer = new ResizeObserver(resize);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [cancelAnimation, setTrackOffset]);
+  }, []);
 
-  useEffect(() => () => cancelAnimation(), [cancelAnimation]);
+  useEffect(() => {
+    const element = viewport.current;
+    if (!element) return;
+    let frame: number | null = null;
+    const read = () => {
+      frame = null;
+      const page = pageIndexForScroll(
+        element.scrollLeft,
+        viewportWidth.current,
+        PAGE_NAMES.length,
+      );
+      if (page === activePageRef.current) return;
+      activePageRef.current = page;
+      setActivePage(page);
+    };
+    const onScroll = () => {
+      // One read per frame: a snap scroll fires this a great many times.
+      if (frame === null) frame = requestAnimationFrame(read);
+    };
+    element.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      element.removeEventListener('scroll', onScroll);
+      if (frame !== null) cancelAnimationFrame(frame);
+    };
+  }, []);
 
   useEffect(() => {
     try {
@@ -417,121 +330,11 @@ export default function HvacCalculator() {
   }, [state.preferencesOpen]);
 
 
-  const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!event.isPrimary || event.button !== 0 || isCarouselGestureControl(event.target)) return;
-    dragState.current = {
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-      baseOffset: trackOffsetRef.current,
-      lastX: event.clientX,
-      lastTime: performance.now(),
-      velocity: 0,
-      locked: false,
-    };
-  };
-
-  const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const drag = dragState.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-    const deltaX = event.clientX - drag.startX;
-    const deltaY = event.clientY - drag.startY;
-
-    if (!drag.locked) {
-      if (Math.max(Math.abs(deltaX), Math.abs(deltaY)) < 10) return;
-      if (Math.abs(deltaY) > Math.abs(deltaX)) {
-        dragState.current = null;
-        return;
-      }
-      const animationWasRunning = animationFrame.current !== null;
-      cancelAnimation();
-      if (animationWasRunning) drag.baseOffset = trackOffsetRef.current - deltaX;
-      drag.locked = true;
-      setDragging(true);
-      suppressClick.current = true;
-      event.currentTarget.setPointerCapture(event.pointerId);
-    }
-
-    event.preventDefault();
-    const now = performance.now();
-    const elapsed = Math.max(now - drag.lastTime, 1);
-    const sampleVelocity = (event.clientX - drag.lastX) / elapsed * 1000;
-    drag.velocity = drag.velocity * 0.62 + sampleVelocity * 0.38;
-    drag.lastX = event.clientX;
-    drag.lastTime = now;
-
-    setTrackOffset(carouselOffsetForPointer(
-      drag.baseOffset,
-      drag.startX,
-      event.clientX,
-      viewportWidth.current,
-      PAGE_NAMES.length,
-    ));
-  };
-
-  const finishPointer = (event: ReactPointerEvent<HTMLDivElement>, cancelled = false) => {
-    const drag = dragState.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-    dragState.current = null;
-    setDragging(false);
-    if (!drag.locked) return;
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-    const releaseTime = performance.now();
-    const releaseOffset = cancelled
-      ? trackOffsetRef.current
-      : carouselOffsetForPointer(
-        drag.baseOffset,
-        drag.startX,
-        event.clientX,
-        viewportWidth.current,
-        PAGE_NAMES.length,
-      );
-    if (!cancelled) setTrackOffset(releaseOffset);
-    const velocity = cancelled
-      ? 0
-      : releasePointerVelocity(
-        drag.velocity,
-        drag.lastX,
-        drag.lastTime,
-        event.clientX,
-        releaseTime,
-      );
-    const target = cancelled
-      ? activePageRef.current
-      : projectedPageIndex(
-        releaseOffset,
-        velocity,
-        viewportWidth.current,
-        PAGE_NAMES.length,
-        activePageRef.current,
-      );
-    animateToPage(target, velocity);
-    window.setTimeout(() => { suppressClick.current = false; }, 0);
-  };
-
   return (
     <main className="app-frame">
       <div className="app-surface" aria-hidden={state.preferencesOpen} inert={state.preferencesOpen}>
-        <div
-          ref={viewport}
-          className="carousel-viewport"
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={(event) => finishPointer(event)}
-          onPointerCancel={(event) => finishPointer(event, true)}
-          onClickCapture={(event) => {
-            if (!suppressClick.current) return;
-            event.preventDefault();
-            event.stopPropagation();
-            suppressClick.current = false;
-          }}
-        >
-        <div
-          className={`carousel-track ${dragging ? 'is-dragging' : ''}`}
-          style={{ transform: `translate3d(${trackOffset}px, 0, 0)` }}
-        >
+        <div ref={viewport} className="carousel-viewport">
+        <div className="carousel-track">
           <section
             className="calculator-page"
             aria-label="Professional HVAC calculator"
@@ -567,7 +370,7 @@ export default function HvacCalculator() {
               className={index === activePage ? 'active' : ''}
               aria-label={`Open ${name} calculator`}
               aria-current={index === activePage ? 'page' : undefined}
-              onClick={() => animateToPage(index)}
+              onClick={() => goToPage(index)}
             >
               <span />
             </button>

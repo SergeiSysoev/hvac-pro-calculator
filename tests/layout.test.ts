@@ -227,27 +227,6 @@ describe('what the stylesheet drags into the bundle', () => {
     expect(specifiers).toEqual([]);
   });
 
-  it('reserves the horizontal gesture inside the scroll container, not outside it', () => {
-    // A browser resolves touch-action by walking up from the element under the
-    // finger only as far as the nearest scroll container. `.page-scroll` is
-    // one, so a declaration on `.carousel-viewport` above it is never read for
-    // a touch that starts on the calculator — which is every touch. Left there
-    // alone, the browser kept the horizontal gesture and cancelled the pointer
-    // mid-drag: the track followed the finger a little and sprang back.
-    // Every rule inside that boundary must refuse pan-x, or the pager is a
-    // decoration on a phone.
-    const css = readFileSync(new URL('../app/globals.css', import.meta.url), 'utf8');
-    const declarations = [...css.matchAll(/touch-action:\s*([^;]+);/g)].map((match) => match[1].trim());
-    expect(declarations.length).toBeGreaterThanOrEqual(4);
-    for (const value of declarations) {
-      expect(value).not.toContain('pan-x');
-      expect(value).not.toBe('manipulation');
-      expect(value).not.toBe('auto');
-    }
-    // The scroll container itself must carry one.
-    expect(css).toMatch(/\.page-scroll\s*\{[^}]*touch-action:\s*pan-y pinch-zoom;/);
-  });
-
   it('reads safe-area insets through the variables, never env() directly', () => {
     // env(safe-area-inset-*) is 0 inside an iframe - the insets belong to the
     // top-level viewport. Embedded in the AirOrchestra app, every rule using
