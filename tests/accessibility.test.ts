@@ -57,23 +57,42 @@ describe('calculator accessibility text', () => {
     );
   });
 
-  it('labels the result line with the word the state calls for', () => {
-    const label = (keys: KeyId[]) => {
-      const state = keys.reduce(
+  it('prints no caption a person can read off the layout, and nothing in the covered corners', () => {
+    // Two removals, one reason. "Result" / "Current group" / "Converted" told a
+    // sighted person what the position of the line already tells them. And the
+    // strip along the top of the card - a context word on the left, state on
+    // the right - sat exactly under the host app's Back and Messenger buttons,
+    // so half of it could not be read at all. The context word is gone; the
+    // state moved below the readout, where nothing covers it.
+    const markup = (keys: KeyId[]) => renderToStaticMarkup(createElement(CalculatorDisplay, {
+      active: true,
+      state: keys.reduce(
         (current, key) => calculatorReducer(current, { type: 'press', key }),
         initialCalculatorState(),
-      );
-      const markup = renderToStaticMarkup(createElement(CalculatorDisplay, {
-        active: true,
-        state,
-        variant: 'physical',
-      }));
-      return markup.match(/class="expression-result-label">([^<]*)</)?.[1];
-    };
+      ),
+      variant: 'physical',
+    }));
 
-    expect(label(['5', 'multiply', '5', 'equals'])).toBe('Result');
-    expect(label(['2', 'multiply', 'left', '3', 'add', '4', 'right'])).toBe('Current group');
-    expect(label(['6', 'feet', 'conv', 'inch'])).toBe('Converted');
+    for (const keys of [
+      ['5', 'multiply', '5', 'equals'],
+      ['2', 'multiply', 'left', '3', 'add', '4', 'right'],
+      ['6', 'feet', 'conv', 'inch'],
+    ] as KeyId[][]) {
+      const rendered = markup(keys);
+      expect(rendered).not.toContain('expression-result-label');
+      expect(rendered).not.toMatch(/>Result</);
+      expect(rendered).not.toMatch(/>Current group</);
+      expect(rendered).not.toMatch(/>Converted</);
+      // The card opens with the readout; the status row, when it exists at
+      // all, comes after it.
+      const body = rendered.indexOf('display-body');
+      const meta = rendered.indexOf('expression-meta');
+      expect(body).toBeGreaterThan(-1);
+      if (meta !== -1) expect(meta).toBeGreaterThan(body);
+    }
+
+    // The row still appears for state a person cannot otherwise see.
+    expect(markup(['5', 'mplus'])).toContain('expression-meta');
   });
 
   it('describes the diagram outside the decorative SVG and keeps one live region', () => {

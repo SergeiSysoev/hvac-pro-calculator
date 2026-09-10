@@ -914,26 +914,20 @@ describe('modern calculator expression display', () => {
     });
   });
 
-  it('names the second line for what it actually is', () => {
-    // The equals sign is a "print an equals" flag, not a "this is the answer"
-    // flag: it is absent for an inner group AND for an exact conversion. Reading
-    // the role off that glyph called 6 Feet -> 72 inches a "Current group", and
-    // called the 7 inside 2 x (3 + 4) the result.
-    const role = (keys: KeyId[]) => calculatorExpressionView(run(keys)).resultRole;
+  it('keeps the state in the spoken text, now that no caption shows it', () => {
+    // The screen used to print "Result" / "Current group" / "Converted" above
+    // the second line. Sighted people read that off the layout, so the words
+    // were a wasted row and they are gone. A screen reader has no layout, so
+    // the same distinction has to survive in what it speaks - and it does,
+    // through contextText, which is where it always came from.
+    const view = (keys: KeyId[]) => calculatorExpressionView(run(keys));
 
-    expect(role(['5', 'multiply', '5', 'equals'])).toBe('result');
-    expect(role(['3', '0', 'sin'])).toBe('result');
-    expect(role(['2', 'multiply', 'left', '3', 'add', '4', 'right'])).toBe('group');
-    expect(role(['2', 'add', 'left', '3', 'add', '4', 'right'])).toBe('group');
-    // Conversions, exact and approximate alike - the exact ones are the case
-    // that regressed, because they carry no equals sign.
-    expect(role(['6', 'feet', 'conv', 'inch'])).toBe('conversion');
-    expect(role(['1', '0', 'feet', 'conv', 'meter'])).toBe('conversion');
-    expect(role(['3', 'feet', 'conv', 'meter'])).toBe('conversion');
-    expect(role(['3', '0', 'decimal', '3', '0', 'conv', 'decimal'])).toBe('conversion');
-    // No second line, no role.
-    expect(role(['5'])).toBeUndefined();
-    expect(role(['5', 'divide', '0', 'equals'])).toBeUndefined();
+    expect(view(['5', 'multiply', '5', 'equals']).contextText).toBe('Expression');
+    expect(view(['2', 'multiply', 'left', '3', 'add', '4', 'right']).contextText).toBe('Current group');
+    expect(view(['6', 'feet', 'conv', 'inch']).contextText).toBe('Conversion');
+
+    expect(view(['2', 'multiply', 'left', '3', 'add', '4', 'right']).ariaText).toContain('Current group 7');
+    expect(view(['6', 'feet', 'conv', 'inch']).ariaText).toContain('converts to');
   });
 
   it('renders semantic result suffixes once and without a calculator-style trailing dot', () => {

@@ -20,7 +20,6 @@ export interface CalculatorExpressionView {
    * What the second line actually is. Never infer this from resultSymbol: that
    * flag is absent for an inner group and for an exact conversion alike.
    */
-  resultRole?: 'result' | 'group' | 'conversion';
   valueLabel?: string;
   valueText?: string;
   valueSymbol?: '=' | '≈';
@@ -3010,13 +3009,6 @@ export function calculatorExpressionView(state: CalculatorState): CalculatorExpr
     contextText,
     expressionText,
     resultText,
-    resultRole: resultText === undefined || hasError
-      ? undefined
-      : hasOuterGroupExpression
-        ? 'group'
-        : hasTransformation
-          ? 'conversion'
-          : 'result',
     resultSymbol: hasTransformation
       ? resultIsApproximate ? '≈' : undefined
       : !hasError

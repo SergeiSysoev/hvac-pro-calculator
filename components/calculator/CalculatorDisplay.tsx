@@ -43,6 +43,12 @@ export default function CalculatorDisplay({
       ? 'RCL'
       : '';
   const sizeClass = expressionSizeClass(view.expressionText);
+  const indicators = [
+    view.progressText ? <b className="sequence-progress" key="progress">{view.progressText}</b> : null,
+    state.parenthesisDepth ? <b key="depth">{`(${state.parenthesisDepth}`}</b> : null,
+    hasMemory(state) ? <b key="memory">M</b> : null,
+    modifier ? <b key="modifier">{modifier}</b> : null,
+  ].filter(Boolean);
   const accessibleDisplay = [
     view.liveText,
     ...accessibleDisplayIndicators(state),
@@ -72,16 +78,6 @@ export default function CalculatorDisplay({
         className={`calc-display calc-display-${variant} display-mode-${view.mode} ${state.display.label === 'ERROR' ? 'is-error' : ''}`}
         aria-hidden="true"
       >
-        <div className="expression-meta">
-          <span>{view.contextText}</span>
-          <span className="expression-indicators">
-            {view.progressText ? <b className="sequence-progress">{view.progressText}</b> : null}
-            {state.parenthesisDepth ? <b>{`(${state.parenthesisDepth}`}</b> : null}
-            {hasMemory(state) ? <b>M</b> : null}
-            {modifier ? <b>{modifier}</b> : null}
-          </span>
-        </div>
-
         <div className={view.diagram ? 'display-body has-diagram' : 'display-body'}>
           {view.diagram ? <CalculatorDiagram view={view.diagram} /> : null}
           <div className="display-readout">
@@ -108,13 +104,6 @@ export default function CalculatorDisplay({
                 </div>
                 {view.resultText ? (
                   <div className="expression-result">
-                    <span className="expression-result-label">
-                      {view.resultRole === 'group'
-                        ? 'Current group'
-                        : view.resultRole === 'conversion'
-                          ? 'Converted'
-                          : 'Result'}
-                    </span>
                     {view.resultSymbol ? <span className="expression-result-symbol">{view.resultSymbol}</span> : null}
                     <ExpressionText className="expression-result-text" text={view.resultText} />
                   </div>
@@ -123,6 +112,16 @@ export default function CalculatorDisplay({
             )}
           </div>
         </div>
+
+        {indicators.length ? (
+          // Not a caption - state a person cannot read off the screen: an open
+          // parenthesis, something in memory, a modifier armed, where a
+          // multi-step sequence has got to. It sits under the readout because
+          // the top corners belong to the app's Back and Messenger buttons.
+          <div className="expression-meta">
+            <span className="expression-indicators">{indicators}</span>
+          </div>
+        ) : null}
 
         {view.guidanceText ? (
           <div className={`display-guidance display-guidance-${view.guidanceTone ?? 'tip'}`}>

@@ -8,6 +8,11 @@
 :root {
   --safe-top: var(--ao-embed-safe-top, env(safe-area-inset-top, 0px));
   --safe-bottom: var(--ao-embed-safe-bottom, env(safe-area-inset-bottom, 0px));
+  /* A host that floats its own controls over this page declares how tall that
+     band is; nothing is drawn under it. Absent - opened as its own page -
+     it is zero. Every page top uses --page-top, never --safe-top alone,
+     because a shorthand `padding` on one page silently dropped the band. */
+  --page-top: calc(var(--safe-top) + var(--ao-embed-chrome-top, 0px));
 }
 
 :root {
@@ -109,7 +114,7 @@ button { -webkit-tap-highlight-color: transparent; }
   flex: 0 0 auto;
   align-items: center;
   justify-content: space-between;
-  padding: var(--safe-top) 12px 0;
+  padding: var(--page-top) 12px 0;
   background: rgba(17, 20, 20, 0.78);
   backdrop-filter: blur(22px) saturate(150%);
   box-shadow: 0 12px 28px rgba(0, 0, 0, 0.13);
@@ -224,7 +229,7 @@ button { -webkit-tap-highlight-color: transparent; }
 .physical-page {
   display: grid;
   place-items: center;
-  padding: var(--safe-top) 0 0;
+  padding: var(--page-top) 0 0;
   background: #070908;
 }
 
@@ -426,10 +431,13 @@ button { -webkit-tap-highlight-color: transparent; }
 }
 
 .expression-meta {
+  /* Under the readout, not above it: the two top corners of this card are
+     covered by the host app's Back and Messenger buttons. */
   display: flex;
   min-height: 18px;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
+  margin-top: 6px;
   gap: 10px;
   color: #6e6e73;
   font-size: 12px;
@@ -1099,7 +1107,7 @@ button { -webkit-tap-highlight-color: transparent; }
 
 .page-dots button.active span { width: 20px; background: var(--yellow); }
 
-.duct-page { padding: 10px 12px 22px; }
+.duct-page { padding: calc(10px + var(--page-top)) 12px 22px; }
 .duct-calculator { display: grid; gap: 10px; }
 .duct-title-row { display: flex; min-height: 46px; align-items: center; justify-content: space-between; gap: 12px; }
 .panel-kicker { margin: 0 0 3px; color: #88a293; font-size: 10px; font-weight: 850; letter-spacing: .1em; text-transform: uppercase; }
