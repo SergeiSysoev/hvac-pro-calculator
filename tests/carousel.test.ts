@@ -13,6 +13,19 @@ const gestureTarget = (matchingSelector?: string, editable = false): EventTarget
   isContentEditable: editable,
 }) as unknown as EventTarget;
 
+/** Matches a whole selector in the list, the way a real `closest` does. The
+ *  helper above matches substrings, so it reports a plain <button> as excluded
+ *  purely because `[role="spinbutton"]` contains the letters. */
+const elementMatchingExactly = (...selectors: string[]): EventTarget => ({
+  closest: (selector: string) => selector
+    .split(',')
+    .map((part) => part.trim())
+    .some((part) => selectors.includes(part))
+    ? ({} as Element)
+    : null,
+  isContentEditable: false,
+}) as unknown as EventTarget;
+
 const targetInsideFocusableCalculatorSection = (): EventTarget => ({
   closest: (selector: string) => selector.includes('[tabindex]:not([tabindex="-1"])')
     ? ({} as Element)
@@ -65,7 +78,6 @@ describe('swipe pager physics', () => {
 
   it('does not begin carousel gestures on controls or editable content', () => {
     expect(isCarouselGestureControl(gestureTarget())).toBe(false);
-    expect(isCarouselGestureControl(gestureTarget('button'))).toBe(true);
     expect(isCarouselGestureControl(gestureTarget('a[href]'))).toBe(true);
     expect(isCarouselGestureControl(gestureTarget('input:not'))).toBe(true);
     expect(isCarouselGestureControl(gestureTarget('select'))).toBe(true);
@@ -76,5 +88,19 @@ describe('swipe pager physics', () => {
 
   it('allows page swipes beneath the focusable calculator section', () => {
     expect(isCarouselGestureControl(targetInsideFocusableCalculatorSection())).toBe(false);
+  });
+
+  it('lets a swipe start on a key, because the keypad is the whole screen', () => {
+    // This was `true`, and it made the pager unusable on a phone: everything
+    // below the display is a key, so the only place a swipe could begin was a
+    // 150 px strip at the top. Confirmed in a real browser before and after.
+    // A tap still presses - the drag needs 10 px of horizontal movement to
+    // lock, and only then is the click suppressed.
+    expect(isCarouselGestureControl(elementMatchingExactly('button'))).toBe(false);
+    expect(isCarouselGestureControl(elementMatchingExactly('[role="button"]'))).toBe(false);
+    // The neighbours are still refused, so this is a removal and not a hole.
+    expect(isCarouselGestureControl(elementMatchingExactly('a[href]'))).toBe(true);
+    expect(isCarouselGestureControl(elementMatchingExactly('textarea'))).toBe(true);
+    expect(isCarouselGestureControl(elementMatchingExactly('[role="slider"]'))).toBe(true);
   });
 });

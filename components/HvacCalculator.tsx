@@ -65,8 +65,20 @@ const TEXT_ENTRY_KEY_TARGETS = [
   '[role="spinbutton"]',
 ].join(', ');
 
+// What a horizontal drag must NOT start on. A push control is deliberately
+// absent from this list: on a calculator the keypad IS the surface, so
+// excluding `button` excluded roughly everything below the display and left a
+// pager you could only work from a 150 px strip at the top. Measured in a real
+// browser with touch emulation: a swipe begun on the display paged, the same
+// swipe begun on a key did nothing at all.
+//
+// A tap on a key is unharmed. The drag only locks after 10 px of mostly
+// horizontal movement, and from that moment the viewport holds the pointer
+// capture and `suppressClick` eats the click; a plain tap never locks, so the
+// key fires exactly as before. What stays excluded is everything where a drag
+// already means something else - text selection, a slider, a native picker,
+// dragging a link - or where the browser owns the gesture.
 const CAROUSEL_GESTURE_EXCLUSION_TARGETS = [
-  'button',
   'a[href]',
   'input:not([type="hidden"])',
   'select',
@@ -76,7 +88,6 @@ const CAROUSEL_GESTURE_EXCLUSION_TARGETS = [
   'summary',
   '[controls]',
   '[contenteditable]:not([contenteditable="false"])',
-  '[role="button"]',
   '[role="link"]',
   '[role="checkbox"]',
   '[role="radio"]',
