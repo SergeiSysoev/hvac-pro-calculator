@@ -417,8 +417,12 @@ button { -webkit-tap-highlight-color: transparent; }
 }
 
 .calc-display-physical {
-  /* Taller now that the hint line is gone from the row below it. */
-  min-height: clamp(212px, 29dvh, 292px);
+  /* A FIXED height, not a floor. As a floor the card grew whenever a state
+     brought a drawing with it - 150 px to 221 px on a phone, measured - and the
+     keypad shrank underneath by the same amount. Every key moved under the
+     thumb because a circle appeared. The card is now the size of its tallest
+     state at all times: nothing on this screen moves except the numbers. */
+  height: clamp(212px, 29dvh, 292px);
   margin-bottom: 5px;
   padding: 16px 17px;
   justify-content: space-between;
@@ -1277,7 +1281,10 @@ button { -webkit-tap-highlight-color: transparent; }
   .brand-badge { width: 34px; height: 34px; border-radius: 10px; }
   .keypad-page { gap: 6px; padding-top: 6px; }
   .calc-display { min-height: 118px; gap: 5px; padding-block: 10px; }
-  .calc-display-physical { min-height: 150px; padding-block: 11px; }
+  /* Short screens: the same rule, sized for the tallest state here. 221 px is
+     what a drawing state measured on a 390x844 phone; this clears it at every
+     height in this branch and never changes while the calculator is used. */
+  .calc-display-physical { height: clamp(224px, 27dvh, 252px); padding-block: 11px; }
   .expression-line { min-height: 42px; font-size: clamp(25px, 7.3vw, 36px); }
   .expression-result { padding-top: 5px; font-size: clamp(23px, 6.8vw, 32px); }
   .named-result-value-line,
