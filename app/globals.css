@@ -1,3 +1,15 @@
+/* Safe-area insets, embedded or standalone.
+   env(safe-area-inset-*) resolves to 0 inside an iframe: the insets belong to
+   the top-level viewport, not to the embedded document. A host that embeds this
+   page measures the real values and pushes them in as --ao-embed-safe-*; opened
+   directly, the env() fallback is what answers. Read them only through these
+   variables, never env() alone, or the calculator loses its notch clearance the
+   moment somebody embeds it. */
+:root {
+  --safe-top: var(--ao-embed-safe-top, env(safe-area-inset-top, 0px));
+  --safe-bottom: var(--ao-embed-safe-bottom, env(safe-area-inset-bottom, 0px));
+}
+
 :root {
   --app-black: #090b0b;
   --panel: #171a1a;
@@ -93,11 +105,11 @@ button { -webkit-tap-highlight-color: transparent; }
 .app-header {
   z-index: 5;
   display: flex;
-  min-height: calc(58px + env(safe-area-inset-top));
+  min-height: calc(58px + var(--safe-top));
   flex: 0 0 auto;
   align-items: center;
   justify-content: space-between;
-  padding: env(safe-area-inset-top) 12px 0;
+  padding: var(--safe-top) 12px 0;
   background: rgba(17, 20, 20, 0.78);
   backdrop-filter: blur(22px) saturate(150%);
   box-shadow: 0 12px 28px rgba(0, 0, 0, 0.13);
@@ -206,7 +218,7 @@ button { -webkit-tap-highlight-color: transparent; }
 .physical-page {
   display: grid;
   place-items: center;
-  padding: env(safe-area-inset-top) 0 0;
+  padding: var(--safe-top) 0 0;
   background: #070908;
 }
 
@@ -1052,11 +1064,11 @@ button { -webkit-tap-highlight-color: transparent; }
 .page-dots {
   z-index: 5;
   display: flex;
-  min-height: calc(44px + env(safe-area-inset-bottom));
+  min-height: calc(44px + var(--safe-bottom));
   flex: 0 0 auto;
   align-items: flex-start;
   justify-content: center;
-  padding-bottom: env(safe-area-inset-bottom);
+  padding-bottom: var(--safe-bottom);
   background: linear-gradient(180deg, rgba(13,16,16,.35), rgba(13,16,16,.92) 35%);
   backdrop-filter: blur(18px);
 }
@@ -1202,7 +1214,7 @@ button { -webkit-tap-highlight-color: transparent; }
   width: min(100%, 760px);
   max-height: min(88dvh, 780px);
   overflow: auto;
-  padding: 8px 16px calc(16px + env(safe-area-inset-bottom));
+  padding: 8px 16px calc(16px + var(--safe-bottom));
   border: 1px solid rgba(255,255,255,.12);
   border-bottom: 0;
   border-radius: 24px 24px 0 0;
@@ -1247,7 +1259,7 @@ button { -webkit-tap-highlight-color: transparent; }
 }
 
 @media (max-height: 860px) {
-  .app-header { min-height: calc(52px + env(safe-area-inset-top)); }
+  .app-header { min-height: calc(52px + var(--safe-top)); }
   .brand-badge { width: 34px; height: 34px; border-radius: 10px; }
   .keypad-page { gap: 6px; padding-top: 6px; }
   .calc-display { min-height: 118px; gap: 5px; padding-block: 10px; }
@@ -1261,7 +1273,7 @@ button { -webkit-tap-highlight-color: transparent; }
   .diagram-canvas { max-height: 78px; }
   .diagram-caption { font-size: 11px; }
   .trade-keypad { gap: 4px; grid-auto-rows: minmax(44px, 1fr); }
-  .page-dots { min-height: calc(44px + env(safe-area-inset-bottom)); }
+  .page-dots { min-height: calc(44px + var(--safe-bottom)); }
 
   .physical-calculator { min-height: 614px; }
   .calculator-face { padding-block: 7px 6px; }

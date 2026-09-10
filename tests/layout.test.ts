@@ -226,4 +226,17 @@ describe('what the stylesheet drags into the bundle', () => {
       .filter((specifier) => !/^(?:[./]|https?:|data:)/.test(specifier));
     expect(specifiers).toEqual([]);
   });
+
+  it('reads safe-area insets through the variables, never env() directly', () => {
+    // env(safe-area-inset-*) is 0 inside an iframe - the insets belong to the
+    // top-level viewport. Embedded in the AirOrchestra app, every rule using
+    // env() directly lost its notch clearance while the host was already
+    // measuring the real values and pushing them in. The two definitions in
+    // :root are the only place env() is allowed to appear.
+    const css = readFileSync(new URL('../app/globals.css', import.meta.url), 'utf8');
+    const uses = [...css.matchAll(/env\(safe-area-inset-[a-z]+/g)].length;
+    const definitions = [...css.matchAll(/--safe-(?:top|bottom):[^;]*env\(safe-area-inset-[a-z]+/g)].length;
+    expect(definitions).toBe(2);
+    expect(uses).toBe(definitions);
+  });
 });
