@@ -211,6 +211,16 @@ button { -webkit-tap-highlight-color: transparent; }
   overflow-y: auto;
   overscroll-behavior-y: contain;
   scrollbar-width: none;
+  /* THE PAGER LIVES OR DIES HERE, not on .carousel-viewport.
+     A browser decides who owns a touch by walking up from the element under
+     the finger only as far as the nearest SCROLL CONTAINER - and this is one.
+     So `touch-action: pan-y pinch-zoom` on .carousel-viewport, one level
+     above, was never consulted for any touch that began inside a page, which
+     is every touch on the calculator. The browser kept the horizontal gesture,
+     delivered a few moves and then cancelled the pointer: the track followed
+     the finger part of the way and sprang back. Declaring it here puts the
+     rule inside the boundary that is actually read. */
+  touch-action: pan-y pinch-zoom;
 }
 
 .page-scroll::-webkit-scrollbar { display: none; }
@@ -267,7 +277,7 @@ button { -webkit-tap-highlight-color: transparent; }
   box-shadow: 0 1px 2px rgba(0, 0, 0, .38);
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
-  touch-action: manipulation;
+  touch-action: pan-y pinch-zoom;
 }
 
 .power-key {
@@ -977,7 +987,7 @@ button { -webkit-tap-highlight-color: transparent; }
   background: #55575c;
   box-shadow: 0 1px 2px rgba(0,0,0,.34);
   cursor: pointer;
-  touch-action: manipulation;
+  touch-action: pan-y pinch-zoom;
   transition: transform 80ms ease-out, filter 80ms ease-out, box-shadow 80ms ease-out;
 }
 
