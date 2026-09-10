@@ -144,11 +144,17 @@ export default function HvacCalculator() {
      the scroll landed on, and scrolling to one when a dot is tapped. */
   const goToPage = useCallback((page: number) => {
     const element = viewport.current;
-    const width = viewportWidth.current;
     const target = Math.max(0, Math.min(PAGE_NAMES.length - 1, page));
     activePageRef.current = target;
     setActivePage(target);
-    if (!element || !width) return;
+    if (!element) return;
+    // Measured here and now, and NOT written back: the observer is the only
+    // writer of the cached width. A dot can be tapped before the observer has
+    // reported, and before the stylesheet has applied - caching what the page
+    // measured in that moment pinned a pre-layout width and the dots stopped
+    // working entirely. Reading it fresh costs one layout on a tap.
+    const width = element.clientWidth;
+    if (!width) return;
     const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     element.scrollTo({ left: target * width, behavior: reduceMotion ? 'auto' : 'smooth' });
   }, []);
@@ -162,9 +168,15 @@ export default function HvacCalculator() {
     if (!element) return;
     const resize = () => {
       const width = element.getBoundingClientRect().width;
-      if (!width) return;
+      if (!width || width === viewportWidth.current) return;
       viewportWidth.current = width;
-      // A rotation or a keyboard must not leave the page half-shown.
+      // Re-align on a WIDTH change only - a rotation must not leave a page half
+      // shown. A height change must be ignored, and on a phone browser that is
+      // the common one: Safari's address bar collapses and expands DURING a
+      // swipe, and re-aligning then drags the pager back to the page the finger
+      // is leaving. Measured: before this guard the pager scrolled itself on
+      // every height change, which is why it paged one way in a browser tab and
+      // both ways inside the app, where there is no address bar to move.
       element.scrollTo({ left: activePageRef.current * width, behavior: 'auto' });
     };
     resize();
